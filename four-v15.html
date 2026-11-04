@@ -545,9 +545,14 @@ function nextRound(room) {
   if (room.over === 'goal') room.holder = room.holder === 1 ? 2 : 1;
 
   if (matchOver(room)) {
+    /* Reset by SEAT, never by role - a role-keyed score credits the other
+       player's goal to you the moment a goal swaps the ball. This is the same
+       rule as newRoom, and it lives in one place for exactly that reason: this
+       branch used to rebuild the scores keyed by role and quietly reintroduced a
+       bug that had already been fixed once. */
     room.round = 0;
-    room.score = { A: 0, D: 0 };
-    room.roundsWon = { A: 0, D: 0 };
+    room.score = { 1: 0, 2: 0 };
+    room.roundsWon = { 1: 0, 2: 0 };
     room.holder = 1;
   } else {
     room.round++;
