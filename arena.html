@@ -70,6 +70,9 @@
   .door input{width:100%;height:56px;border-radius:10px;border:1px solid var(--rule);background:#11161e;
               color:var(--ink);font:600 22px/1 ui-monospace,Consolas,monospace;letter-spacing:.4em;
               text-align:center;text-transform:uppercase;padding:0 8px 0 14px}
+  .door .row{display:flex;gap:8px;align-items:stretch}
+  .door .row input{flex:1 1 auto;width:auto;min-width:0}
+  .door .row button{flex:0 0 92px;width:92px}
   .door input::placeholder{letter-spacing:.3em;color:#39414d;font-weight:400}
   .door button{width:100%;height:52px;border-radius:10px;border:0;font:600 14px/1 system-ui;cursor:pointer}
   .door .go{background:var(--accent);color:#1a1408}
@@ -122,22 +125,34 @@
        leave is a jagged line — and the jagged line is what the other one reads.</p>
 
     <div id="pick">
-      <input id="code" maxlength="4" placeholder="CODE" autocomplete="off"
-             autocapitalize="characters" spellcheck="false">
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="go" id="join" style="flex:1">Join</button>
+      <button class="go" id="host">Start a game</button>
+      <p style="margin:0;font-size:12px;color:var(--dim);text-align:center">
+        One person starts. The other joins with the code it shows.</p>
+      <div style="display:flex;gap:8px;margin-top:2px">
+        <input id="code" maxlength="4" placeholder="CODE" autocomplete="off"
+               autocapitalize="characters" spellcheck="false">
+        <button class="go" id="join" style="width:96px">Join</button>
       </div>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button class="solo" id="host" style="flex:1">Start a game</button>
-        <button class="solo" id="hotseat" style="flex:1">One phone</button>
-      </div>
+      <button class="solo" id="hotseat" style="margin-top:2px">One phone</button>
     </div>
 
     <div id="lobby" class="hidden">
-      <p style="text-align:center;color:var(--dim);font:10px/1 ui-monospace,Consolas,monospace;letter-spacing:.16em">TELL THEM THIS</p>
+      <p style="text-align:center;color:var(--dim);font:10px/1 ui-monospace,Consolas,monospace;letter-spacing:.16em">YOUR GAME IS OPEN</p>
       <div class="code" id="codeOut"></div>
       <div class="wait" id="waitOut">Opening…</div>
-      <div class="hint" style="text-align:center;margin-top:6px">They open this page, type the code, and press Join.</div>
+      <div class="hint" style="text-align:center;margin-top:8px" id="shareWrap">
+        <button class="solo" id="share" style="height:44px;font-size:13px">Send the link</button>
+      </div>
+      <div class="hint" id="copied" style="text-align:center;color:var(--good)"></div>
+      <div class="hint" style="text-align:center">On the other phone: open this page, type the four
+        letters, press Join.</div>
+      <div class="hint" style="text-align:center;margin-top:10px;padding-top:10px;border-top:1px solid var(--rule)">
+        Did they start a game too? Then join theirs instead.</div>
+      <div style="display:flex;gap:8px">
+        <input id="code2" maxlength="4" placeholder="THEIR CODE" autocomplete="off"
+               autocapitalize="characters" spellcheck="false" style="font-size:17px;height:46px;letter-spacing:.3em">
+        <button class="solo" id="join2" style="width:88px;height:46px">Join</button>
+      </div>
     </div>
 
     <div class="err" id="err"></div>
@@ -318,6 +333,19 @@ let myBeatKey = '';       /* so a press is forgotten exactly when the beat chang
 let sent = false;         /* already pressed this beat */
 
 let peer = null, conn = null, hostCode = '';
+let joined = false;
+
+/* Whatever told us the guest is here - the open event, an already-open
+   connection, or the guest's first message - this runs once. */
+function hostJoined() {
+  if (mode !== 'host' || joined) return;
+  joined = true;
+  $('waitOut').textContent = 'They are here.';
+  setTimeout(hideDoor, 400);
+  paintHost();
+  pushState();
+  startHeartbeat();
+}
 
 function randCode() {
   let s = '';
@@ -330,12 +358,13 @@ function wireAvailable() { return typeof Peer !== 'undefined'; }
 /* ---- host ---- */
 function startHost() {
   if (!wireAvailable()) {
-    $('err').textContent = 'No internet, so two phones cannot meet.';
+    $('err').textContent = 'The game needs internet once, to load its connection code. Check the wifi and reload.';
     return;
   }
   mode = 'host';
   seat = 1;
   room = newRoom(false);
+  joined = false;
   hostCode = randCode();
   openLobby(hostCode);
 
@@ -349,25 +378,25 @@ function startHost() {
   peer.on('connection', c => {
     if (conn && conn.open) { try { c.close(); } catch (e) {} return; }
     conn = c;
-    c.on('open', () => {
-      $('waitOut').textContent = 'They are here.';
-      setTimeout(hideDoor, 550);
-      paintHost();          /* the host's own screen first, then tell the guest */
-      pushState();
-    });
+
+    /* The guest may already be open here. PeerJS does not always raise `open`
+       on the side that received the connection, so the joined work is driven
+       from three places and runs exactly once. */
+    c.on('open', () => hostJoined());
     c.on('data', onWire);
     c.on('close', () => { conn = null; checkLink(); });
     c.on('error', () => { conn = null; checkLink(); });
+    if (c.open) hostJoined();
   });
 
   peer.on('error', e => {
     if (e && e.type === 'unavailable-id') {
-      /* the code is taken; take another and say so */
+      /* the code is taken; take another */
       try { peer.destroy(); } catch (err) {}
       startHost();
       return;
     }
-    $('err').textContent = 'Could not open a room. ' + (e && e.type ? e.type : '');
+    $('err').textContent = 'Could not open a room. ' + (e && e.type ? e.type : 'Try again.');
   });
 }
 
@@ -380,6 +409,17 @@ function checkLink() {
 function pushState() {
   if (mode !== 'host' || !conn || !conn.open) return;
   conn.send({ t: 'state', s: snapshot(room) });
+}
+
+/* The host repeats the current state on a slow tick. A turn-based game has no
+   simulation to fall out of, but one lost frame would still strand a phone on
+   "Committed" forever, and the tick costs nothing. */
+let heartbeat = 0;
+function startHeartbeat() {
+  clearInterval(heartbeat);
+  heartbeat = setInterval(() => {
+    if (mode === 'host' && conn && conn.open) pushState();
+  }, 1500);
 }
 
 /* ---- guest ---- */
@@ -395,35 +435,42 @@ function startGuest(code) {
 }
 
 function joinTry(code, attempt) {
-  $('waitOut').textContent = 'Looking for ' + code + '…';
+  $('waitOut').textContent = 'Joining ' + code + '…';
   try { if (peer) peer.destroy(); } catch (e) {}
 
   peer = new Peer({ debug: 1 });
 
   peer.on('open', () => {
     conn = peer.connect('theline-' + code, { reliable: true });
-    conn.on('open', () => {
-      hideDoor();
-      $('room').textContent = code;
-      conn.send({ t: 'hello' });
-    });
+
+    const say = () => { try { conn.send({ t: 'hello' }); } catch (e) {} };
+
+    /* Say hello until the host answers, not once. One lost first message would
+       otherwise leave the guest looking at a still lobby forever. */
+    let tries = 0;
+    const knock = setInterval(() => {
+      if (view || mode !== 'guest' || ++tries > 25) { clearInterval(knock); return; }
+      say();
+    }, 800);
+
+    conn.on('open', () => { $('room').textContent = code; say(); });
     conn.on('data', onWire);
-    conn.on('close', () => { linkLost(); });
-    conn.on('error', () => { linkLost(); });
+    conn.on('close', () => { clearInterval(knock); linkLost(); });
+    conn.on('error', () => { clearInterval(knock); linkLost(); });
   });
 
   peer.on('error', e => {
     const type = e && e.type;
-    if (type === 'peer-unavailable' && attempt < 6) {
+    if (type === 'peer-unavailable' && attempt < 8) {
       /* the host may not have opened yet; the code is not wrong, just early */
-      setTimeout(() => joinTry(code, attempt + 1), 900);
+      setTimeout(() => joinTry(code, attempt + 1), 1000);
       return;
     }
     if (type === 'peer-unavailable') {
-      showPick('No game is open with that code.');
+      showPick('No game is open with that code. Ask them to press Start a game, then join the code it shows.');
       return;
     }
-    $('err').textContent = 'Could not connect. ' + (type || '');
+    $('err').textContent = 'Could not connect. ' + (type || 'Try again.');
   });
 }
 
@@ -435,13 +482,21 @@ function linkLost() {
 /* ---- what the wire carries ---- */
 function onWire(msg) {
   if (!msg || !msg.t) return;
-  if (msg.t === 'state') { view = msg.s; myBeatKey = ''; paint(); return; }
 
-  /* everything below is only for the authority */
-  if (mode !== 'host' || !room) {
-    if (mode === 'guest' && msg.t === 'bye') linkLost();
+  if (msg.t === 'state') {
+    if (mode !== 'guest') return;
+    view = msg.s; myBeatKey = '';
+    hideDoor();            /* the first state is the proof the game is on */
+    paint();
     return;
   }
+
+  /* everything below is only for the authority */
+  if (mode !== 'host' || !room) return;
+
+  /* a message from the guest proves the link, even if `open` never fired */
+  if (msg.t === 'hello' || msg.t === 'press' || msg.t === 'next') hostJoined();
+
   if (msg.t === 'hello') { pushState(); return; }
   if (msg.t === 'press') {
     if (press(room, roleOf(room, 2), msg.dir)) { paintHost(); pushState(); }
@@ -449,7 +504,7 @@ function onWire(msg) {
   }
   if (msg.t === 'next') {
     if (room.over) { nextRound(room); paintHost(); pushState(); }
-        return;
+    return;
   }
 }
 
@@ -701,6 +756,7 @@ function openLobby(code) {
   $('codeOut').textContent = code;
   $('err').textContent = '';
   $('hint').textContent = '';
+  $('shareWrap').classList.remove('hidden');
 }
 
 function hideDoor() { $('door').classList.add('hidden'); }
@@ -718,11 +774,30 @@ $('join').onclick = () => {
   const code = $('code').value.trim().toUpperCase();
   if (code.length !== 4) { $('err').textContent = 'Four letters.'; return; }
   $('err').textContent = '';
+  $('copied').textContent = '';
   $('pick').classList.add('hidden');
   $('lobby').classList.remove('hidden');
   $('door').classList.remove('hidden');
   $('codeOut').textContent = code;
+  $('waitOut').textContent = 'Joining ' + code + '…';
+  $('shareWrap').classList.add('hidden');
   startGuest(code);
+};
+
+$('share').onclick = () => {
+  const link = location.origin + location.pathname + '?room=' + hostCode;
+  const text = 'The line is the sentence. Open this: ' + link;
+  if (navigator.share) {
+    navigator.share({ title: 'The line is the sentence', text, url: link }).catch(() => {});
+    return;
+  }
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(link).then(
+      () => { $('copied').textContent = 'Link copied. Paste it to them.'; },
+      () => { $('copied').textContent = 'Copy this: ' + link; });
+    return;
+  }
+  $('copied').textContent = link;
 };
 
 $('host').onclick = () => { $('err').textContent = ''; startHost(); };
@@ -731,6 +806,29 @@ $('code').addEventListener('input', e => {
   e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
 });
 $('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('join').click(); });
+
+/* If they started a game too, either person can drop their own and take the
+   other's code. This is the mistake the door made easy, so it is a real path. */
+function joinFromLobby() {
+  const code = $('code2').value.trim().toUpperCase();
+  if (code.length !== 4) return;
+  try { if (peer) peer.destroy(); } catch (e) {}
+  conn = null;
+  $('err').textContent = '';
+  $('copied').textContent = '';
+  $('codeOut').textContent = code;
+  $('waitOut').textContent = 'Joining ' + code + '…';
+  $('shareWrap').classList.add('hidden');
+  mode = 'guest';
+  seat = 2;
+  hostCode = code;
+  joinTry(code, 1);
+}
+$('join2').onclick = joinFromLobby;
+$('code2').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
+});
+$('code2').addEventListener('keydown', e => { if (e.key === 'Enter') joinFromLobby(); });
 
 /* =========================================================================
    Input
