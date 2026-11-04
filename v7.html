@@ -162,6 +162,7 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 /* =========================================================================
    The rules. One copy, one owner: this block is the whole game.
@@ -324,19 +325,19 @@ function snapshot(room) {
    The wire.
 
    A turn-based game needs no simulation to stay in step: it needs a way for
-   two browsers to exchange about ten small messages a turn. This uses a public
-   message bus (ntfy.sh) as that pipe, which is one HTTP request per message and
-   no peer-to-peer handshake to fall over.
+   two browsers to exchange about ten small messages a turn. A WebRTC data
+   channel through PeerJS's public broker is that pipe, and the broker only
+   matches the two of them - the messages go straight between the phones.
 
-   Both phones publish to one topic named by the room code. Every message says
-   who sent it, so a phone drops the ones that are its own echo.
+   Whatever proves the link is up, only one function acts on it, because there
+   are three ways to learn it and they can all fire.
    ========================================================================= */
 const $ = id => document.getElementById(id);
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-const BUS = 'https://ntfy.sh/';
+const PREFIX = 'the-line-b7-';
 
 let mode = 'door';        /* 'door' | 'hotseat' | 'host' | 'guest' */
-const BUILD = 6;
+const BUILD = 7;
 let seat = 1;             /* 1 or 2; the role is read from the round */
 let room = null;          /* the authority: this browser, when hosting or alone */
 let view = null;          /* the last state this phone drew */
@@ -344,7 +345,7 @@ let myBeatKey = '';       /* so a press is forgotten exactly when the beat chang
 let sent = false;         /* already pressed this beat */
 
 let hostCode = '';
-let bus = null;           /* { es, code, side } */
+let peer = null, conn = null;
 let joined = false;
 let knockTimer = 0;
 let tickTimer = 0;
@@ -355,45 +356,23 @@ function randCode() {
   return s;
 }
 
-function wireAvailable() { return typeof EventSource === 'function'; }
+function wireAvailable() { return typeof Peer === 'function'; }
 
-/* ---- the pipe itself ---- */
-function topicOf(code) { return 'the-line-v1-' + code; }
-
-function openBus(code, side, onMessage) {
-  closeBus();
-  const es = new EventSource(BUS + topicOf(code) + '/sse');
-
-  /* The bus answers with its own envelope; the game's message is inside it. */
-  es.onmessage = e => {
-    let outer, msg;
-    try { outer = JSON.parse(e.data); } catch (err) { return; }
-    if (outer.event && outer.event !== 'message') return;
-    try { msg = JSON.parse(outer.message); } catch (err) { return; }
-    if (!msg || msg.f === side) return;    /* my own message, echoed back */
-    onMessage(msg);
-  };
-
-  es.onerror = () => {};                    /* EventSource reopens by itself */
-  bus = { es, code, side };
-}
-
-function closeBus() {
-  if (bus && bus.es) { try { bus.es.close(); } catch (e) {} }
-  bus = null;
-}
-
-function say(msg) {
-  if (!bus) return;
-  fetch(BUS + topicOf(bus.code), { method: 'POST', body: JSON.stringify(msg) }).catch(() => {});
+function hangUp() {
+  clearInterval(knockTimer); clearInterval(tickTimer);
+  knockTimer = 0; tickTimer = 0;
+  try { if (conn) conn.close(); } catch (e) {}
+  try { if (peer) peer.destroy(); } catch (e) {}
+  conn = null; peer = null;
 }
 
 /* ---- host ---- */
 function startHost() {
   if (!wireAvailable()) {
-    $('err').textContent = 'This browser cannot reach the game bus. Try another browser.';
+    $('err').textContent = 'The connection code did not load. Check the wifi and reload.';
     return;
   }
+  hangUp();
   mode = 'host';
   seat = 1;
   room = newRoom(false);
@@ -404,8 +383,34 @@ function startHost() {
   openLobby(hostCode);
   $('waitOut').textContent = 'Waiting for the other phone.';
 
-  openBus(hostCode, 'h', onGuestMessage);
-  startTicker();
+  peer = new Peer(PREFIX + hostCode, { debug: 0 });
+
+  peer.on('open', () => {
+    $('waitOut').textContent = 'Waiting for the other phone.';
+  });
+
+  peer.on('connection', c => {
+    if (conn && conn.open) { try { c.close(); } catch (e) {} return; }
+    conn = c;
+    /* Three ways, one action. PeerJS does not always raise `open` on the side
+       that received the connection, so the guest's first message counts too. */
+    c.on('open', hostJoined);
+    c.on('data', onGuestMessage);
+    c.on('close', () => { conn = null; if (mode === 'host') { joined = false;
+      $('waitOut').textContent = 'They left. The code still works.';
+      openLobby(hostCode); } });
+    c.on('error', () => {});
+    if (c.open) hostJoined();
+  });
+
+  peer.on('error', e => {
+    if (e && e.type === 'unavailable-id') {
+      try { peer.destroy(); } catch (err) {}
+      startHost();
+      return;
+    }
+    $('err').textContent = 'Could not open a game: ' + (e && e.type ? e.type : 'unknown') + '.';
+  });
 }
 
 /* Whatever proves the guest is there, this runs once. */
@@ -415,14 +420,16 @@ function hostJoined() {
   $('waitOut').textContent = 'They are here.';
   paintHost();
   pushState();
+  startTicker();
   setTimeout(hideDoor, 300);
 }
 
 function onGuestMessage(msg) {
-  if (mode !== 'host' || !room) return;
-  if (msg.t === 'hello') { hostJoined(); pushState(); return; }
+  if (mode !== 'host' || !room || !msg) return;
+  hostJoined();
+  if (msg.t === 'hello') { pushState(); return; }
   if (msg.t === 'press') {
-    if (press(room, roleOf(room, 2), msg.d)) { hostJoined(); paintHost(); pushState(); }
+    if (press(room, roleOf(room, 2), msg.d)) { paintHost(); pushState(); }
     return;
   }
   if (msg.t === 'next') {
@@ -431,69 +438,97 @@ function onGuestMessage(msg) {
 }
 
 function pushState() {
-  if (mode !== 'host' || !room) return;
-  say({ f: 'h', t: 'state', s: snapshot(room) });
+  if (mode !== 'host' || !room || !conn || !conn.open) return;
+  try { conn.send({ t: 'state', s: snapshot(room) }); } catch (e) {}
 }
 
 /* The host repeats the state on a slow tick. One lost message would otherwise
-   strand a phone on "Committed" forever, and the tick costs one tiny request. */
+   strand a phone on "Committed" forever, and the tick costs nothing. */
 function startTicker() {
   clearInterval(tickTimer);
   tickTimer = setInterval(() => {
-    if (mode !== 'host' || !joined) return;
-    pushState();
-  }, 1400);
+    if (mode === 'host' && joined) pushState();
+  }, 1200);
 }
 
 /* ---- guest ---- */
 function startGuest(code) {
   if (!wireAvailable()) {
-    $('err').textContent = 'This browser cannot reach the game bus. Try another browser.';
+    $('err').textContent = 'The connection code did not load. Check the wifi and reload.';
     return;
   }
+  hangUp();
   mode = 'guest';
   seat = 2;
   hostCode = code;
   view = null;
-
   $('waitOut').textContent = 'Joining ' + code + '…';
-  openBus(code, 'g', onHostMessage);
-  knock();
+  joinTry(code, 1);
 }
 
-/* Say hello until the host answers. One lost first message must not leave the
-   guest staring at a still lobby. */
-function knock() {
-  clearInterval(knockTimer);
-  let tries = 0;
-  const hello = () => say({ f: 'g', t: 'hello' });
-  hello();
-  knockTimer = setInterval(() => {
-    if (mode !== 'guest') { clearInterval(knockTimer); return; }
-    if (view) { clearInterval(knockTimer); return; }
-    if (++tries > 30) {
-      clearInterval(knockTimer);
-      showPick('No answer from ' + hostCode + '. Is the other phone still showing that code?');
+function joinTry(code, attempt) {
+  try { if (peer) peer.destroy(); } catch (e) {}
+  conn = null;
+
+  peer = new Peer({ debug: 0 });
+
+  peer.on('open', () => {
+    if (mode !== 'guest') return;
+    conn = peer.connect(PREFIX + code, { reliable: true });
+
+    const hello = () => { try { if (conn && conn.open) conn.send({ t: 'hello' }); } catch (e) {} };
+
+    conn.on('open', () => { $('room').textContent = code; hello(); knockLater(hello); });
+    conn.on('data', onHostMessage);
+    conn.on('close', () => { clearInterval(knockTimer); knockTimer = 0; linkLost(); });
+    conn.on('error', () => {});
+  });
+
+  peer.on('error', e => {
+    const type = e && e.type;
+    if (type === 'peer-unavailable' && attempt < 10) {
+      /* the host may not have opened yet; the code is not wrong, just early */
+      setTimeout(() => { if (mode === 'guest') joinTry(code, attempt + 1); }, 1200);
       return;
     }
+    if (type === 'peer-unavailable') {
+      showPick('No answer from ' + code + '. Check the four letters, and that the' +
+               ' other phone still shows them.');
+      return;
+    }
+    if (attempt < 3 && (type === 'network' || type === 'server-error' || type === 'socket-error')) {
+      setTimeout(() => { if (mode === 'guest') joinTry(code, attempt + 1); }, 1500);
+      return;
+    }
+    $('err').textContent = 'Could not connect: ' + (type || 'unknown') + '.';
+  });
+}
+
+/* Keep saying hello until a state arrives. One lost first message must not
+   leave the guest staring at a still lobby. */
+function knockLater(hello) {
+  clearInterval(knockTimer);
+  let tries = 0;
+  knockTimer = setInterval(() => {
+    if (mode !== 'guest' || view) { clearInterval(knockTimer); knockTimer = 0; return; }
+    if (++tries > 20) { clearInterval(knockTimer); knockTimer = 0;
+      showPick('No answer from ' + hostCode + '.'); return; }
     hello();
-  }, 900);
+  }, 1000);
 }
 
 function onHostMessage(msg) {
-  if (mode !== 'guest') return;
-  if (msg.t !== 'state' || !msg.s) return;
+  if (mode !== 'guest' || !msg || msg.t !== 'state' || !msg.s) return;
   view = msg.s;
   myBeatKey = '';
   $('room').textContent = hostCode;
-  hideDoor();
+  hideDoor();            /* the first state is the proof the game is on */
   paint();
 }
 
 function linkLost() {
   if (mode !== 'guest') return;
-  clearInterval(knockTimer);
-  closeBus();
+  clearInterval(knockTimer); knockTimer = 0;
   showPick('The other phone left.');
 }
 
@@ -545,7 +580,7 @@ function doPress(dir) {
     return;
   }
   if (mode === 'guest') {
-    say({ f: 'g', t: 'press', d: dir });
+    try { if (conn && conn.open) conn.send({ t: 'press', d: dir }); } catch (e) {}
     paint();
   }
 }
@@ -554,7 +589,7 @@ function doNext() {
   if (!view || !view.over) return;
   if (mode === 'host') { nextRound(room); paintHost(); pushState(); return; }
   if (mode === 'hotseat') { nextRound(room); paintHost(); return; }
-  if (mode === 'guest') say({ f: 'g', t: 'next' });
+  if (mode === 'guest') { try { if (conn && conn.open) conn.send({ t: 'next' }); } catch (e) {} }
 }
 
 /* the authority paints from its own room, every phone from the wire */
@@ -731,8 +766,7 @@ function paint() {
    ========================================================================= */
 function showPick(msg) {
   mode = 'door'; view = null; room = null;
-  clearInterval(knockTimer); clearInterval(tickTimer);
-  closeBus();
+  hangUp();
   $('pick').classList.remove('hidden');
   $('lobby').classList.add('hidden');
   $('door').classList.remove('hidden');
@@ -757,8 +791,7 @@ function startHotseat() {
   seat = 1;
   room = newRoom(false);
   hostCode = '';
-  clearInterval(knockTimer); clearInterval(tickTimer);
-  closeBus();
+  hangUp();
   hideDoor();
   paintHost();
 }
@@ -841,7 +874,7 @@ window.addEventListener('orientationchange', () => setTimeout(() => { if (view) 
 
 /* One reading of the live state, for the console and for a probe. */
 window.__line = () => ({ mode, seat, view, room, code: hostCode,
-                         bus: bus ? bus.side : null, joined });
+                         linked: !!(conn && conn.open), joined });
 
 /* =========================================================================
    Start: a link with ?room= drops straight into a game.
