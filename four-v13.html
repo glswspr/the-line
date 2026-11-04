@@ -1,0 +1,1661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e13">
+<title>Four ways to draw one line</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#141922; --rule:#242b36; --soft:#7d8798; --dim:#525b69;
+    --ink:#e9e6df; --accent:#d8a657; --def:#7f9ec7; --bad:#c2645c; --good:#7cc4a6;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{margin:0;font:14px/1.5 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--ink);
+       overflow:hidden;user-select:none;touch-action:manipulation}
+  .hidden{display:none!important}
+
+  .stage{height:100%;display:flex;flex-direction:column;
+         padding:calc(8px + env(safe-area-inset-top)) 10px calc(8px + env(safe-area-inset-bottom));
+         max-width:520px;margin:0 auto;width:100%}
+
+  .top{display:flex;align-items:baseline;gap:10px;padding:2px 4px 8px;flex:0 0 auto}
+  .me{font:11px/1 ui-monospace,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase}
+  .me b{font-size:13px;letter-spacing:0;margin-left:5px}
+  .me.a b{color:var(--accent)} .me.d b{color:var(--def)}
+  .scoreline{margin-left:auto;display:flex;gap:9px;font:11px/1 ui-monospace,Consolas,monospace;color:var(--soft)}
+  .scoreline b{color:var(--ink);font-weight:600}
+  .scoreline span.ball{color:var(--accent);position:relative;padding-left:9px}
+  .scoreline span.ball::before{content:"";position:absolute;left:0;top:50%;width:5px;height:5px;
+    margin-top:-2.5px;border-radius:50%;background:var(--accent)}
+  .room{font:10px/1 ui-monospace,Consolas,monospace;color:var(--dim);letter-spacing:.16em}
+
+  .field{position:relative;border:1px solid var(--rule);border-radius:12px;background:#080b0f;
+         overflow:hidden;line-height:0;flex:0 0 auto;width:100%}
+  canvas{display:block;margin:0 auto}
+
+  .say{flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;
+       text-align:center;padding:12px 8px;min-height:72px}
+  .say h2{margin:0;font-size:16px;font-weight:600;line-height:1.35}
+  .say p{margin:5px 0 0;font-size:12px;color:var(--soft);max-width:30ch}
+  .say.att h2{color:var(--accent)} .say.def h2{color:var(--def)}
+  .say.win h2{color:var(--good)} .say.lose h2{color:var(--bad)}
+  .dots{display:flex;gap:6px;justify-content:center;margin-top:9px}
+  .dot{width:7px;height:7px;border-radius:50%;background:#2a323d;transition:background .15s}
+  .dot.on{background:var(--accent)} .dot.on.d{background:var(--def)}
+
+  /* how long is left to decide, or how much of the round is left */
+  .meter{width:112px;height:2px;border-radius:2px;background:#1d242e;overflow:hidden;margin-top:9px}
+  .meter i{display:block;height:100%;width:100%;background:var(--soft);transform-origin:left center}
+  .meter.low i{background:var(--bad)}
+
+  .pads{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1 1 auto;min-height:140px;padding-bottom:2px}
+  .pad{display:flex;flex-direction:column;gap:8px;align-items:center;transition:opacity .15s}
+  .pad span{font:9px/1 ui-monospace,Consolas,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .pad.at span{color:var(--accent)} .pad.df span{color:var(--def)}
+  .pad button{width:100%;flex:1 1 auto;min-height:92px;border-radius:14px;border:1px solid var(--rule);
+              background:#171d26;color:var(--ink);font-size:30px;line-height:1;cursor:pointer;
+              transition:transform .06s,background .1s,border-color .1s}
+  .pad button:active{transform:scale(.98)}
+  .pad.at button{border-color:rgba(216,166,87,.35);background:rgba(216,166,87,.1)}
+  .pad.df button{border-color:rgba(127,158,199,.35);background:rgba(127,158,199,.1)}
+  .pad button:disabled{opacity:.25}
+  .pad.idle{opacity:.3;pointer-events:none}
+
+  .again{flex:0 0 auto;margin-top:10px}
+  .again button{width:100%;height:52px;border-radius:12px;border:1px solid var(--accent);
+                background:var(--accent);color:#1a1408;font:600 14px/1 system-ui;cursor:pointer}
+
+  .door{position:absolute;inset:0;background:var(--bg);display:flex;flex-direction:column;
+        justify-content:center;padding:24px 20px calc(24px + env(safe-area-inset-bottom));gap:11px;z-index:5;
+        overflow-y:auto}
+  .door h1{margin:0;font-size:19px;font-weight:600}
+  .door p{margin:0;font-size:13px;color:var(--soft);line-height:1.55}
+  .door input{width:100%;height:52px;border-radius:10px;border:1px solid var(--rule);background:#11161e;
+              color:var(--ink);font:600 22px/1 ui-monospace,Consolas,monospace;letter-spacing:.4em;
+              text-align:center;text-transform:uppercase;padding:0 8px 0 14px}
+  .door .row{display:flex;gap:8px;align-items:stretch}
+  .door .row input{flex:1 1 auto;width:auto;min-width:0}
+  .door .row button{flex:0 0 92px;width:92px}
+  .door input::placeholder{letter-spacing:.3em;color:#39414d;font-weight:400}
+  .door button{width:100%;height:50px;border-radius:10px;border:0;font:600 14px/1 system-ui;cursor:pointer}
+  .door .go{background:var(--accent);color:#1a1408}
+  .door .solo{background:#1b2029;color:var(--ink);border:1px solid var(--rule)}
+  .door .err{font-size:12px;color:var(--bad);min-height:16px}
+  .door .hint{font:11px/1.6 ui-monospace,Consolas,monospace;color:var(--dim)}
+  .door .build{font:10px/1 ui-monospace,Consolas,monospace;color:#39414d;margin:0}
+  .door .code{font:600 40px/1.1 ui-monospace,Consolas,monospace;letter-spacing:.18em;
+              text-align:center;color:var(--accent);padding:10px 0}
+  .door .wait{font-size:12px;color:var(--soft);text-align:center;min-height:18px}
+
+  /* the variant switch: two axes, four corners */
+  .axes{display:grid;gap:7px;border:1px solid var(--rule);border-radius:11px;padding:10px;background:#10151c}
+  .axis{display:grid;grid-template-columns:46px 1fr 1fr;gap:6px;align-items:center}
+  .axis.four{grid-template-columns:46px 1fr 1fr 1fr 1fr}
+  .axis i{font:9px/1 ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;
+          color:var(--dim);font-style:normal}
+  .axis button{height:36px;border-radius:8px;border:1px solid var(--rule);background:#171d26;
+               color:var(--soft);font:600 12px/1 system-ui;cursor:pointer}
+  .axis button[aria-pressed="true"]{background:rgba(216,166,87,.14);border-color:rgba(216,166,87,.5);color:var(--ink)}
+  .sentence{font:11px/1.5 ui-monospace,Consolas,monospace;color:var(--dim);padding:0 2px}
+
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="top">
+    <span class="me" id="me">the line</span>
+    <span class="room" id="room"></span>
+    <span class="scoreline">
+      <span>you <b id="sa">0</b></span>
+      <span>them <b id="sd">0</b></span>
+    </span>
+  </div>
+
+  <div class="field"><canvas id="cv"></canvas></div>
+
+  <div class="say" id="say">
+    <h2 id="sh">Four ways to draw one line</h2>
+    <p id="sp"></p>
+    <div class="meter" id="meter"><i></i></div>
+    <div class="dots" id="dots"></div>
+  </div>
+
+  <div class="pads">
+    <div class="pad" id="padL">
+      <span id="labL">left</span>
+      <button id="btnL" aria-label="turn left">&#9664;</button>
+    </div>
+    <div class="pad" id="padR">
+      <span id="labR">right</span>
+      <button id="btnR" aria-label="turn right">&#9654;</button>
+    </div>
+  </div>
+
+  <div class="again" id="againWrap" hidden>
+    <button id="again">Continue</button>
+  </div>
+
+  <div class="door" id="door">
+    <h1>Four ways to draw one line.</h1>
+    <p>One mechanic, four readings: when you decide, and how the line bends. Then pick how much
+       field to draw it on. Your run never stops - it keeps going until you change it.</p>
+    <p class="build" id="build">build 0</p>
+
+    <div class="axes">
+      <div class="axis">
+        <i>when</i>
+        <button data-axis="tempo" data-val="beat">beat</button>
+        <button data-axis="tempo" data-val="live">live</button>
+      </div>
+      <div class="axis">
+        <i>bend</i>
+        <button data-axis="motion" data-val="snap">snap</button>
+        <button data-axis="motion" data-val="arc">curve</button>
+      </div>
+      <div class="axis four">
+        <i>pitch</i>
+        <button data-axis="pitch" data-val="short">short</button>
+        <button data-axis="pitch" data-val="normal">normal</button>
+        <button data-axis="pitch" data-val="long">long</button>
+        <button data-axis="pitch" data-val="huge">huge</button>
+      </div>
+      <div class="sentence" id="sentence"></div>
+    </div>
+
+    <div id="pick">
+      <button class="go" id="host">Start a game</button>
+      <p style="margin:0;font-size:12px;color:var(--dim);text-align:center">
+        One person starts. The other joins with the code it shows.</p>
+      <div style="display:flex;gap:8px;margin-top:2px">
+        <input id="code" maxlength="4" placeholder="CODE" autocomplete="off"
+               autocapitalize="characters" spellcheck="false">
+        <button class="go" id="join" style="width:94px">Join</button>
+      </div>
+      <button class="solo" id="solo" style="margin-top:2px">One phone, against the line</button>
+    </div>
+
+    <div id="lobby" class="hidden">
+      <p style="text-align:center;color:var(--dim);font:10px/1 ui-monospace,Consolas,monospace;letter-spacing:.16em">YOUR GAME IS OPEN</p>
+      <div class="code" id="codeOut"></div>
+      <div class="wait" id="waitOut">Opening…</div>
+      <div class="hint" style="text-align:center;margin-top:8px" id="shareWrap">
+        <button class="solo" id="share" style="height:42px;font-size:13px">Copy the link</button>
+      </div>
+      <div class="hint" id="copied" style="text-align:center;color:var(--good)"></div>
+      <div class="hint" style="text-align:center">On the other phone: open this page, type the four
+        letters, press Join.</div>
+      <div class="hint" style="text-align:center;margin-top:9px;padding-top:9px;border-top:1px solid var(--rule)">
+        Did they start a game too? Join theirs instead.</div>
+      <div style="display:flex;gap:8px">
+        <input id="code2" maxlength="4" placeholder="THEIR CODE" autocomplete="off"
+               autocapitalize="characters" spellcheck="false" style="font-size:17px;height:44px;letter-spacing:.3em">
+        <button class="solo" id="join2" style="width:86px;height:44px">Join</button>
+      </div>
+    </div>
+
+    <div class="err" id="err"></div>
+    <div class="hint" id="hint"></div>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   The rules.
+
+   One body, four readings. A body always moves forward along its heading;
+   nothing makes it stop. What differs between the four variants is only:
+
+     when you decide   beat  - both commit blind, then the beat plays out
+                       live  - you steer while it runs
+
+     how it bends       snap - the heading jumps by one quantum
+                       arc  - the heading sweeps through it
+
+   Everything else - the field, the goal, the reach, the speeds - is shared,
+   so any difference in feel comes from those two choices and nothing else.
+   ========================================================================= */
+const PITCHES = {
+  short:  { w: 22, h: 15, label: 'short'  },
+  normal: { w: 30, h: 20, label: 'normal' },
+  long:   { w: 40, h: 26, label: 'long'   },
+  huge:   { w: 52, h: 34, label: 'huge'   },
+};
+
+const GOAL = 1.2, REACH = 0.78;
+const SPEED = { A: 7.0, D: 6.2 };
+const QUANT = 45;                 /* degrees in one snap */
+const ARC_TURN = { A: 170, D: 220 };  /* degrees per second, live + arc */
+const BEAT = 0.62;                /* seconds a committed beat takes to play */
+const CHOOSE = 2.4;               /* seconds before an idle beat holds its line */
+const CLOCK = { 'beat-snap': 26, 'beat-arc': 26, 'live-snap': 22, 'live-arc': 22 };
+const BEST_OF = 3;
+
+/* A side is three bodies: the one with the ball, and two mates trailing it in a
+   V. The mates are not simulated - they are read off the carrier's heading, so
+   they turn with it and arrive at the other phone as part of the same snapshot.
+   That is what keeps the wire and the replica exactly as they were: a formation
+   is a way of drawing a heading, not a second thing to predict. */
+const MATE_OFF = [
+  { back: 1.5, side: -1.5 },
+  { back: 1.5, side: 1.5 }
+];
+
+/* Where a side's mates are, given its carrier. Pure function of the state. */
+function matesOf(s, side) {
+  const lead = side === 'A' ? s.a : s.d;
+  const back = rad(lead.a + 180), flank = rad(lead.a + 90);
+  return MATE_OFF.map(o => ({
+    x: clamp(lead.x + Math.cos(back) * o.back + Math.cos(flank) * o.side, 0.35, s.w - 0.35),
+    y: clamp(lead.y + Math.sin(back) * o.back + Math.sin(flank) * o.side, 0.35, s.h - 0.35),
+    a: lead.a
+  }));
+}
+
+/* The ball sits at the carrier's front foot. A goal is the BALL crossing, not
+   any body crossing - a mate over the line is a wasted run, which is the whole
+   reason the mates exist. */
+function ballAt(s) {
+  const c = s.a;
+  return { x: c.x + Math.cos(rad(c.a)) * 1.02, y: c.y + Math.sin(rad(c.a)) * 1.02, a: c.a };
+}
+
+/* The bodies start a fixed fraction of the way in, so a bigger pitch is a
+   longer run to the edge rather than the same run with more empty grass. */
+function startFor(pitch) {
+  return {
+    A: { x: pitch.w * 0.12, y: pitch.h / 2, a: 0 },
+    D: { x: pitch.w * 0.84, y: pitch.h / 2, a: 180 }
+  };
+}
+
+const MODES = {
+  'beat-snap': { tempo: 'beat', motion: 'snap',
+    line: 'Both of you commit at once. The heading jumps; the path is a chain of straight pieces.' },
+  'beat-arc':  { tempo: 'beat', motion: 'arc',
+    line: 'Both of you commit at once. The heading sweeps; the path is a chain of curves.' },
+  'live-snap': { tempo: 'live', motion: 'snap',
+    line: 'You steer while it runs. Each tap jumps the heading; the line is faceted.' },
+  'live-arc':  { tempo: 'live', motion: 'arc',
+    line: 'You steer while it runs. Holding bends the heading; the line is a smooth curve.' },
+};
+
+const rad = d => d * Math.PI / 180;
+const dist = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const norm = a => ((a % 360) + 540) % 360 - 180;
+const cloneBody = b => ({ x: b.x, y: b.y, a: b.a });
+
+/* One tick of a body. `dir` is -1, 0 or 1. `bend` is how many DEGREES the
+   heading changes this tick; the caller decides that, because snap and arc
+   change it at different moments. Every angle in this file is in degrees, and
+   radians appear only inside the trig calls. The pitch bounds come from the
+   room, because the pitch is chosen per match.
+
+   A body cannot step through the other side's mates. Both sides get the same
+   rule - the screen is a property of the formation, not a privilege of the
+   attacker. The mates sit behind and to either side of their carrier, so
+   whichever way it turns, one flank is covered and the other body has to come
+   round. That is what the extra bodies buy: the turn is not only about reaching
+   the edge, it is about choosing which side of yourself is covered. */
+const BLOCK_R = 0.85;
+
+function moveBody(room, b, role, dir, dt, bend) {
+  b.a += bend;
+
+  const nx = clamp(b.x + Math.cos(rad(b.a)) * SPEED[role] * dt, 0.35, room.w - 0.35);
+  const ny = clamp(b.y + Math.sin(rad(b.a)) * SPEED[role] * dt, 0.35, room.h - 0.35);
+
+  {
+    const mates = matesOf(room, role === 'A' ? 'D' : 'A');
+    const hits = (x, y) => mates.some(m => Math.hypot(x - m.x, y - m.y) < BLOCK_R);
+
+    if (hits(nx, ny)) {
+      /* A body is in the way. A defender does not stop dead against a screen -
+         it goes round it, which is what makes the screen cost time rather than
+         win the round outright. Slide along the nearest clear side instead. */
+      const slide = [22, -22, 45, -45].find(d => {
+        const h = rad(b.a + d);
+        const sx = clamp(b.x + Math.cos(h) * SPEED[role] * dt, 0.35, room.w - 0.35);
+        const sy = clamp(b.y + Math.sin(h) * SPEED[role] * dt, 0.35, room.h - 0.35);
+        return !hits(sx, sy);
+      });
+      if (slide === undefined) return;      /* boxed in: pinned for this tick */
+      const h = rad(b.a + slide);
+      b.x = clamp(b.x + Math.cos(h) * SPEED[role] * dt, 0.35, room.w - 0.35);
+      b.y = clamp(b.y + Math.sin(h) * SPEED[role] * dt, 0.35, room.h - 0.35);
+      return;
+    }
+  }
+
+  b.x = nx; b.y = ny;
+}
+
+function newRoom(variant, vsBot, pitchName) {
+  const pitch = PITCHES[pitchName] || PITCHES.normal;
+  const room = {
+    variant,
+    tempo: MODES[variant].tempo,
+    motion: MODES[variant].motion,
+    pitch: pitch.label,
+    w: pitch.w, h: pitch.h,
+    bot: !!vsBot,
+    round: 0,
+    holder: 1,                  /* the seat holding the ball */
+    /* Scores belong to a player, not to a role. A goal swaps the roles, so a
+       role-keyed score would credit the other player's goal to you. */
+    score: { 1: 0, 2: 0 },
+    roundsWon: { 1: 0, 2: 0 }
+  };
+  startRound(room);
+  return room;
+}
+
+/* A side keeps its identity all match; the ball decides which side is attacking.
+   `holder` is the seat that has it, so a goal hands the attack to the other
+   phone rather than being decided in advance by the round number. */
+function roleOf(room, seat) {
+  return seat === (room.holder || 1) ? 'A' : 'D';
+}
+
+function startRound(room) {
+  const start = startFor({ w: room.w, h: room.h });
+  room.a = cloneBody(start.A);
+  room.d = cloneBody(start.D);
+  room.ta = [[room.a.x, room.a.y]];
+  room.td = [[room.d.x, room.d.y]];
+
+  room.phase = room.tempo === 'beat' ? 'choose' : 'run';
+  room.t = 0;                 /* seconds inside the current phrase */
+  room.clock = CLOCK[room.variant];      /* the round */
+  room.window = CHOOSE;                  /* time left to commit this beat */
+  room.beat = 0;
+  room.pending = { A: null, D: null };   /* committed direction, or null */
+  room.held = { A: 0, D: 0 };            /* live steering */
+  room.tap = { A: 0, D: 0 };             /* a snap waiting to be applied */
+  room.over = null;
+  room.winner = null;
+  room.lastBeat = { A: 0, D: 0 };        /* the direction each just played */
+
+  if (room.bot) think(room);
+}
+
+/* ---- the beat ---- */
+
+/* A player commits one direction for the coming beat. `null` is a real choice:
+   it means the line holds, and keeps going the way it was already going. */
+function commit(room, role, dir) {
+  if (room.over || room.phase !== 'choose') return false;
+  if (room.pending[role] !== null) return false;
+  room.pending[role] = (dir === -1 || dir === 1) ? dir : 0;
+  if (room.pending.A !== null && room.pending.D !== null) playBeat(room);
+  return true;
+}
+
+function playBeat(room) {
+  if (room.phase !== 'choose') return;
+  if (room.pending.A === null) room.pending.A = 0;   /* the clock ran out: hold */
+  if (room.pending.D === null) room.pending.D = 0;
+  room.lastBeat = { A: room.pending.A, D: room.pending.D };
+  room.beat++;
+  room.phase = 'play';
+  room.t = 0;
+}
+
+/* One owner of the bend rule.
+
+   There are exactly four ways a heading can change, and this function is the
+   only place that decides between them:
+
+     beat + snap - the whole quantum at once, on the first tick of the beat
+     beat + arc  - the same quantum spread across the beat
+     live + snap - one quantum per tap, applied on the next tick
+     live + arc  - a continuous sweep while a pad is held
+
+   Both the room and the bot's look-ahead go through here, so the preview and
+   the real thing can never disagree. Taps are queued on the room rather than
+   written straight onto the body, so a tap that arrives mid-tick lands in a
+   known place instead of racing the next frame. */
+function applyMotion(room, b, role, dir, dt, first) {
+  if (room.motion === 'snap') {
+    let bend = 0;
+    if (room.tempo === 'beat') bend = first ? dir * QUANT : 0;
+    else if (room.tap && room.tap[role]) {
+      bend = room.tap[role] * QUANT;
+      if (room.tap) room.tap[role] = 0;
+    }
+    moveBody(room, b, role, dir, dt, bend);
+    return;
+  }
+  const rate = room.tempo === 'beat' ? QUANT / BEAT : ARC_TURN[role];
+  moveBody(room, b, role, dir, dt, dir * rate * dt);
+}
+
+function tickBeat(room, dt) {
+  if (room.phase === 'choose') {
+    room.clock -= dt;
+    room.window -= dt;
+
+    /* A beat nobody answers still plays. The window is the whole point of
+       "hold your line": waiting is a move, so it has to be one the game
+       resolves, not a stall the game waits on. A replica never decides this:
+       the host already has, and it says so in the next state. */
+    if (room.replica) return;
+    if (room.window <= 0) playBeat(room);
+    else if (room.clock <= 0) { room.over = 'time'; room.winner = room.holder === 1 ? 2 : 1; }
+    return;
+  }
+
+  if (room.phase === 'play') {
+    const left = Math.min(dt, BEAT - room.t);
+    const first = room.t === 0;
+    ['A', 'D'].forEach(role => {
+      const b = role === 'A' ? room.a : room.d;
+      applyMotion(room, b, role, room.lastBeat[role], left, first);
+    });
+    room.t += left;
+    pushTrail(room);
+
+    if (!room.replica && endCheck(room)) return;
+    if (room.t >= BEAT - 1e-9) {
+      room.phase = 'choose';
+      room.t = 0;
+      room.window = CHOOSE;
+      room.pending = { A: null, D: null };
+      if (room.bot) think(room);
+    }
+    return;
+  }
+}
+
+/* ---- the live run ---- */
+
+function tickLive(room, dt) {
+  room.clock -= dt;
+
+  ['A', 'D'].forEach(role => {
+    const b = role === 'A' ? room.a : room.d;
+    applyMotion(room, b, role, room.held[role], dt, false);
+  });
+  pushTrail(room);
+
+  if (room.replica) return;
+  if (endCheck(room)) return;
+
+  if (room.bot && room.tempo === 'live') think(room);
+
+  if (room.clock <= 0) { room.over = 'time'; room.winner = room.holder === 1 ? 2 : 1; }
+}
+
+function tick(room, dt) {
+  if (room.over) return;
+  if (room.tempo === 'beat') tickBeat(room, dt);
+  else tickLive(room, dt);
+}
+
+function pushTrail(room) {
+  const [ax, ay] = room.ta[room.ta.length - 1];
+  if (Math.hypot(room.a.x - ax, room.a.y - ay) > 0.28) room.ta.push([room.a.x, room.a.y]);
+  const [dx, dy] = room.td[room.td.length - 1];
+  if (Math.hypot(room.d.x - dx, room.d.y - dy) > 0.28) room.td.push([room.d.x, room.d.y]);
+}
+
+function endCheck(room) {
+  const ball = ballAt(room);
+
+  /* The target is the carrier, never a mate. A tackle is about the ball. */
+  const caught = dist(room.a, room.d) <= REACH;
+
+  /* Only the ball crossing counts. A mate past the line is a wasted run.
+     The winner is a SEAT, not a role: the roles swap on a goal, so a role could
+     not say which player won the round. */
+  const other = room.holder === 1 ? 2 : 1;
+
+  if (caught) { room.over = 'tackle'; room.winner = other; }
+  else if (ball.x >= room.w - GOAL) { room.over = 'goal'; room.winner = room.holder; }
+  else return false;
+
+  room.score[room.winner]++;
+  room.roundsWon[room.winner]++;
+  room.held = { A: 0, D: 0 };
+  return true;
+}
+
+function matchOver(room) { return Math.max(room.roundsWon[1], room.roundsWon[2]) > (BEST_OF >> 1); }
+
+function nextRound(room) {
+  /* A goal hands the ball to the other side. Scoring is not a reward you keep -
+     it costs you the attack, which is what makes a round worth winning. A
+     tackle or a timeout keeps the attack where it was. */
+  if (room.over === 'goal') room.holder = room.holder === 1 ? 2 : 1;
+
+  if (matchOver(room)) {
+    room.round = 0;
+    room.score = { A: 0, D: 0 };
+    room.roundsWon = { A: 0, D: 0 };
+    room.holder = 1;
+  } else {
+    room.round++;
+  }
+  startRound(room);
+}
+
+/* ---- the line plays itself ---- */
+
+/* Where the run will be when the defender could get there. Aims at the future
+   body, not the present one, because a straight chase is always behind. */
+function interceptPoint(room) {
+  let t = dist(room.a, room.d) / SPEED.A;
+  let px = room.a.x, py = room.a.y;
+  for (let i = 0; i < 6; i++) {
+    px = clamp(room.a.x + Math.cos(rad(room.a.a)) * SPEED.A * t, 0.35, room.w - 0.35);
+    py = clamp(room.a.y + Math.sin(rad(room.a.a)) * SPEED.A * t, 0.35, room.h - 0.35);
+    t = Math.hypot(px - room.d.x, py - room.d.y) / SPEED.D;
+    if (t <= 0) break;
+  }
+  return { x: px, y: py };
+}
+
+const turnTo = (from, to) => {
+  const e = norm(to - from);
+  return Math.abs(e) < 8 ? 0 : Math.sign(e);
+};
+
+function think(room) {
+  const role = roleOf(room, 2);
+
+  if (role === 'D') {
+    const p = interceptPoint(room);
+    const want = Math.atan2(p.y - room.d.y, p.x - room.d.x) * 180 / Math.PI;
+    const dir = turnTo(room.d.a, want);
+    if (room.tempo === 'beat') { if (room.pending.D === null) commit(room, 'D', dir); }
+    else room.held.D = dir;
+    return;
+  }
+
+  /* the attacker looks one choice ahead and takes the one that gains the most
+     ground while staying clear of the reach */
+  let best = 0, bestScore = -Infinity;
+  const span = room.tempo === 'beat' ? BEAT : 0.55;
+  const step = 1 / 60;
+
+  for (const dir of [-1, 0, 1]) {
+    const p = cloneBody(room.a);
+    const q = cloneBody(room.d);
+    let worst = Infinity;
+
+    /* The preview reuses applyMotion, so it bends exactly as the room will. It
+       needs the pitch bounds and the two bodies too: moveBody clamps against the
+       bounds and reads the other side's mates for the screen, so a bare preview
+       would either clamp against undefined (every candidate NaN, which silently
+       turns the bot into a body that only holds its line) or throw. */
+    const preview = {
+      tempo: room.tempo, motion: room.motion, w: room.w, h: room.h,
+      a: p, d: q
+    };
+    for (let t = 0; t < span; t += step) {
+      applyMotion(preview, p, 'A', dir, step, t === 0);
+      moveBody(room, q, 'D', 0, step, 0);
+      worst = Math.min(worst, Math.hypot(p.x - q.x, p.y - q.y));
+    }
+    if (worst <= REACH) continue;
+    let score = p.x - (worst < 2.4 ? (2.4 - worst) * 12 : 0);
+    const edge = Math.min(p.y - 0.35, room.h - 0.35 - p.y);
+    if (edge < 2.2) score -= (2.2 - edge) * 4;
+    if (score > bestScore) { bestScore = score; best = dir; }
+  }
+
+  if (room.tempo === 'beat') { if (room.pending.A === null) commit(room, 'A', best); }
+  else room.held.A = best;
+}
+
+/* What a phone may know. A committed direction never leaves the room until the
+   beat has played, so neither side can read the other before choosing. A live
+   steering direction is not a secret - it is visible in the motion itself - so
+   it travels, which is what lets the other phone predict the body. */
+function snapshot(room) {
+  room.seq = (room.seq || 0) + 1;
+  return {
+    seq: room.seq,
+    at: Math.round(performance.now()),
+    variant: room.variant,
+    tempo: room.tempo,
+    motion: room.motion,
+    round: room.round,
+    holder: room.holder || 1,
+    beat: room.beat,
+    phase: room.phase,
+    t: room.t,
+    clock: Math.max(0, room.clock),
+    window: Math.max(0, room.window),
+    over: room.over,
+    winner: room.winner,
+    score: room.score,
+    roundsWon: room.roundsWon,
+    matchOver: matchOver(room),
+    a: room.a, d: room.d,
+    w: room.w, h: room.h,
+    pitch: room.pitch,
+    ta: room.ta, td: room.td,
+    held: room.held,
+    committed: { A: room.pending.A !== null, D: room.pending.D !== null },
+    playing: room.lastBeat
+  };
+}
+
+/* =========================================================================
+   The wire.
+
+   Both phones open a WebSocket to a public MQTT broker and subscribe to one
+   topic each: the host owns the game and publishes it, the guest publishes
+   only its input. The phones never connect to each other, so neither needs a
+   reachable address - which is what makes a phone on mobile data and a PC at
+   home able to play at all.
+
+   A beat is a handful of small messages. A live run is about twelve a second,
+   which is why the guest draws the last state it was sent rather than waiting
+   for the next one.
+   ========================================================================= */
+const $ = id => document.getElementById(id);
+const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+const TOPIC = 'four/v13/';
+const BUILD = 13;
+const SEND_HZ = 12;
+
+let mode = 'door';        /* 'door' | 'solo' | 'host' | 'guest' */
+const BUILD_NO = BUILD;
+let seat = 1;
+let room = null;
+let view = null;
+let myBeatKey = '';
+let chosen = false;
+
+let hostCode = '';
+let mq = null;
+let joined = false;
+let knockTimer = 0;
+let sendTimer = 0;
+let retryTimer = 0;
+let frame = 0;
+let lastFrame = 0;
+
+let pickTempo = 'beat';
+let pickMotion = 'snap';
+let pickPitch = 'normal';
+
+const variantOf = (tempo, motion) => tempo + '-' + motion;
+
+function randCode() {
+  let s = '';
+  for (let i = 0; i < 4; i++) s += ALPHA[Math.floor(Math.random() * ALPHA.length)];
+  return s;
+}
+
+const enc = s => [...new TextEncoder().encode(s)];
+const varint = n => { const a = []; do { let d = n % 128; n = Math.floor(n / 128); if (n > 0) d |= 128; a.push(d); } while (n > 0); return a; };
+const str = s => { const b = enc(s); return [b.length >> 8, b.length & 255].concat(b); };
+
+function mqConnect({ onReady, onMessage, onFail }) {
+  let ws;
+  try { ws = new WebSocket(BROKER, ['mqtt']); }
+  catch (e) { onFail && onFail('cannot open'); return null; }
+
+  const clientId = 'four' + Math.random().toString(36).slice(2, 12);
+  let buf = new Uint8Array(0);
+  let alive = false;
+  let pinger = 0;
+
+  const send = bytes => { try { ws.send(new Uint8Array(bytes).buffer); } catch (e) {} };
+  const link = { api: null, close() { clearInterval(pinger); alive = false; try { ws.close(); } catch (e) {} } };
+
+  ws.onopen = () => {
+    ws.binaryType = 'arraybuffer';
+    const vh = [].concat(str('MQTT'), [4, 0x02, 0, 60], str(clientId));
+    send([0x10, ...varint(vh.length), ...vh]);
+  };
+
+  ws.onmessage = evt => {
+    const chunk = new Uint8Array(evt.data);
+    const merged = new Uint8Array(buf.length + chunk.length);
+    merged.set(buf); merged.set(chunk, buf.length);
+    buf = merged;
+
+    for (;;) {
+      if (buf.length < 2) return;
+      let mult = 1, len = 0, i = 1, byte;
+      do {
+        if (i >= buf.length) return;
+        byte = buf[i++];
+        len += (byte & 127) * mult;
+        mult *= 128;
+      } while (byte & 128);
+
+      if (buf.length < i + len) return;
+      const type = buf[0] >> 4;
+      const body = buf.slice(i, i + len);
+      buf = buf.slice(i + len);
+
+      if (type === 2) {
+        alive = true;
+        link.api = {
+          subscribe(topic) {
+            const b = [].concat([0x00, 0x01], str(topic), [0x00]);
+            send([0x82, ...varint(b.length), ...b]);
+          },
+          publish(topic, payload) {
+            const b = [].concat(str(topic), enc(payload));
+            send([0x30, ...varint(b.length), ...b]);
+          }
+        };
+        onReady && onReady(link.api);
+      } else if (type === 3) {
+        const tlen = (body[0] << 8) | body[1];
+        onMessage && onMessage(new TextDecoder().decode(body.slice(2 + tlen)));
+      }
+    }
+  };
+
+  ws.onclose = () => { alive = false; link.api = null; onFail && onFail('closed'); };
+  ws.onerror = () => {};
+
+  pinger = setInterval(() => { if (alive) send([0xC0, 0x00]); }, 25000);
+  return link;
+}
+
+function hangUp() {
+  clearInterval(knockTimer); clearInterval(sendTimer); clearInterval(retryTimer);
+  knockTimer = sendTimer = retryTimer = 0;
+  if (frame) { cancelAnimationFrame(frame); frame = 0; }
+  if (mq) { try { mq.close(); } catch (e) {} }
+  mq = null;
+  joined = false;
+}
+
+const hostTopic = code => TOPIC + code + '/toHost';
+const guestTopic = code => TOPIC + code + '/toGuest';
+
+/* ---- host ---- */
+function startHost() {
+  hangUp();
+  mode = 'host';
+  seat = 1;
+  room = newRoom(variantOf(pickTempo, pickMotion), false, pickPitch);
+  view = null;
+  hostCode = randCode();
+
+  openLobby(hostCode);
+  $('waitOut').textContent = 'Opening…';
+
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(hostTopic(hostCode));
+      if (mode === 'host' && !joined) $('waitOut').textContent = 'Waiting for the other phone.';
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onGuestMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'host') return;
+      $('err').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'host') startHost(); }, 2500);
+    }
+  });
+}
+
+function hostJoined() {
+  if (mode !== 'host' || joined) return;
+  joined = true;
+  $('waitOut').textContent = 'They are here.';
+  paintHost();
+  startLoop();
+  sendLoop();
+  setTimeout(hideDoor, 260);
+}
+
+function onGuestMessage(msg) {
+  if (mode !== 'host' || !room || !msg) return;
+  hostJoined();
+
+  const role = roleOf(room, 2);
+
+  if (msg.t === 'hello') { sendState(); return; }
+
+  if (msg.t === 'in') {
+    if (room.tempo === 'beat') {
+      /* a beat takes one commitment per player, and nothing else */
+      if (msg.first) commit(room, role, msg.d);
+    } else if (msg.tap && room.motion === 'snap') {
+      room.tap[role] = msg.d === -1 ? -1 : 1;
+    } else if (msg.stop) {
+      room.held[role] = 0;
+    } else {
+      room.held[role] = msg.d === -1 || msg.d === 1 ? msg.d : 0;
+    }
+    return;
+  }
+
+  if (msg.t === 'next' && room.over) { nextRound(room); paintHost(); sendState(); }
+}
+
+function sendState() {
+  if (mode !== 'host' || !room || !mq || !mq.api) return;
+  const payload = JSON.stringify({ t: 's', s: snapshot(room) });
+  try { mq.api.publish(guestTopic(hostCode), payload); } catch (e) {}
+}
+
+function sendLoop() {
+  clearInterval(sendTimer);
+  sendTimer = setInterval(() => {
+    if (mode === 'host' && joined && room && !room.over) sendState();
+  }, Math.round(1000 / SEND_HZ));
+}
+
+/* ---- guest ---- */
+function startGuest(code) {
+  hangUp();
+  mode = 'guest';
+  seat = 2;
+  hostCode = code;
+  view = null;
+  $('waitOut').textContent = 'Joining ' + code + '…';
+
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(guestTopic(code));
+      const hello = () => {
+        try { if (mode === 'guest') api.publish(hostTopic(code), JSON.stringify({ t: 'hello' })); } catch (e) {}
+      };
+      hello();
+      knockLater(hello);
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onHostMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'guest') return;
+      $('err').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'guest') startGuest(hostCode); }, 2500);
+    }
+  });
+}
+
+function knockLater(hello) {
+  clearInterval(knockTimer);
+  let tries = 0;
+  knockTimer = setInterval(() => {
+    if (mode !== 'guest' || view) { clearInterval(knockTimer); knockTimer = 0; return; }
+    if (++tries > 25) {
+      clearInterval(knockTimer); knockTimer = 0;
+      showPick('No answer from ' + hostCode + '. Check the four letters, and that the other phone still shows them.');
+      return;
+    }
+    hello();
+  }, 900);
+}
+
+function onHostMessage(msg) {
+  if (mode !== 'guest' || !msg) return;
+  if (msg.t === 's' && msg.s) {
+    const first = !view;
+    view = msg.s;
+    absorb(msg.s);
+    $('room').textContent = hostCode;
+    hideDoor();
+    if (first) { paint(); startLoop(); }
+    else {
+      const k = paintKey(view);
+      if (k !== lastPaintKey) { lastPaintKey = k; paint(); }
+    }
+  }
+}
+
+/* ---- the guest's own copy of the game ----
+
+   The guest used to draw whatever positions the wire last delivered, which is
+   why it stuttered: the host thinks sixty times a second and the wire carries
+   twelve. Blending the gaps smooths the number but it is still replaying
+   where things were, not where they are going.
+
+   Instead the guest runs the same simulation as the host. Motion is fully
+   determined by the steering direction - the run never stops, so a body with a
+   direction simply moves - and that direction is not a secret, because it is
+   visible in the motion anyway. So the guest holds both directions, ticks its
+   own copy every frame, and draws that.
+
+   The wire then carries only the facts the guest cannot work out: a new beat,
+   a round ending, a score. Drift between the two copies is corrected gently
+   rather than by teleporting, so a late message never shows as a jump. */
+let replica = null;
+let corrA = { x: 0, y: 0 };
+let corrD = { x: 0, y: 0 };
+
+function replicaFrom(s) {
+  replica = {
+    replica: true, bot: false,
+    variant: s.variant, tempo: s.tempo, motion: s.motion,
+    pitch: s.pitch, w: s.w, h: s.h,
+    round: s.round, beat: s.beat, holder: s.holder || 1,
+    phase: s.phase, t: s.t, clock: s.clock, window: s.window,
+    a: cloneBody(s.a), d: cloneBody(s.d),
+    ta: s.ta.map(p => p.slice()), td: s.td.map(p => p.slice()),
+    held: { A: s.held ? s.held.A : 0, D: s.held ? s.held.D : 0 },
+    pending: { A: null, D: null },
+    lastBeat: { A: s.playing ? s.playing.A : 0, D: s.playing ? s.playing.D : 0 },
+    over: s.over, winner: s.winner,
+    score: s.score, roundsWon: s.roundsWon,
+    seq: 0
+  };
+  corrA = { x: 0, y: 0 };
+  corrD = { x: 0, y: 0 };
+}
+
+/* Take in what the host knows. Discrete facts are adopted as they are - the
+   round, the beat, whether it is over - while positions are reconciled. */
+function absorb(s) {
+  const reset = !replica ||
+    replica.round !== s.round || replica.beat !== s.beat ||
+    replica.over !== s.over || replica.phase !== s.phase;
+
+  if (reset) {
+    /* A new beat or a new round is a genuine discontinuity: start from what the
+       host says, so the two copies cannot disagree about where a beat began. */
+    replicaFrom(s);
+    return;
+  }
+
+  replica.clock = s.clock;
+  replica.window = s.window;
+  replica.score = s.score;
+  replica.roundsWon = s.roundsWon;
+  replica.holder = s.holder || 1;
+
+  /* The host's copy of my own steering is a round trip behind mine. Adopting it
+     would undo the press I just made, which is the same stutter moved onto the
+     one body I am watching. My direction is mine; the other one is the host's. */
+  const me = myRole();
+  if (s.held) {
+    replica.held = {
+      A: me === 'A' ? replica.held.A : s.held.A,
+      D: me === 'D' ? replica.held.D : s.held.D
+    };
+  }
+  if (s.playing) replica.lastBeat = { A: s.playing.A, D: s.playing.D };
+
+  /* Where the host says the bodies are, as a correction to be spent over the
+     next few frames rather than applied at once. */
+  corrA = { x: s.a.x - replica.a.x, y: s.a.y - replica.a.y };
+  corrD = { x: s.d.x - replica.d.x, y: s.d.y - replica.d.y };
+
+  /* Too far apart to be drift - snap, or the two would spend a second
+     catching up. */
+  if (Math.hypot(corrA.x, corrA.y) > 3 || Math.hypot(corrD.x, corrD.y) > 3) {
+    replica.a = cloneBody(s.a);
+    replica.d = cloneBody(s.d);
+    replica.ta = s.ta.map(p => p.slice());
+    replica.td = s.td.map(p => p.slice());
+    corrA = { x: 0, y: 0 };
+    corrD = { x: 0, y: 0 };
+  }
+}
+
+/* A phone pressing a pad moves its own body at once, and the correction it is
+   owed stays where it is. Waiting for the host to confirm would put the same
+   stutter back on the one body the player is watching. */
+function replicaSteer(role, dir) {
+  if (!replica) return;
+  replica.held[role] = dir;
+}
+
+function tickReplica(dt) {
+  if (!replica || replica.over) return;
+  const slices = Math.ceil(dt / 0.02);
+  const each = dt / slices;
+  for (let i = 0; i < slices && !replica.over; i++) {
+    tick(replica, each);
+    /* spend a fifth of the outstanding correction each slice */
+    replica.a.x += corrA.x * 0.2; replica.a.y += corrA.y * 0.2;
+    replica.d.x += corrD.x * 0.2; replica.d.y += corrD.y * 0.2;
+    corrA.x *= 0.8; corrA.y *= 0.8;
+    corrD.x *= 0.8; corrD.y *= 0.8;
+  }
+}
+
+/* What the guest should draw: its own copy, brought up to this instant. */
+function renderView() {
+  if (mode !== 'guest' || !replica) return view;
+  return snapshot(replica);
+}
+
+function guestSend(obj) {
+  if (mode !== 'guest' || !mq || !mq.api) return;
+  try { mq.api.publish(hostTopic(hostCode), JSON.stringify(obj)); } catch (e) {}
+}
+
+function linkLost() {
+  if (mode !== 'guest') return;
+  clearInterval(knockTimer); knockTimer = 0;
+  showPick('The other phone left.');
+}
+
+/* =========================================================================
+   The clock. One loop for all four modes: it ticks the room when this phone
+   owns it, and draws whatever the room currently is.
+   ========================================================================= */
+function startLoop() {
+  if (frame) return;
+  lastFrame = performance.now();
+  const step = now => {
+    frame = requestAnimationFrame(step);
+    let dt = (now - lastFrame) / 1000;
+    lastFrame = now;
+    if (!(dt > 0)) return;
+    if (dt > 0.1) dt = 0.1;          /* a sleeping phone must not teleport */
+
+    if (room && !room.over && (mode === 'host' || mode === 'solo')) {
+      const slices = Math.ceil(dt / 0.02);
+      const each = dt / slices;
+      for (let i = 0; i < slices && !room.over; i++) tick(room, each);
+      if (room.over) { paintHost(); sendState(); }
+    }
+    if (room) {
+      view = snapshot(room);
+      /* the words only change on a beat boundary; the picture changes every
+         frame, so only the picture is redrawn at frame rate */
+      const k = paintKey(view);
+      if (k !== lastPaintKey) { lastPaintKey = k; paint(); }
+      else draw(view);
+    } else if (view) {
+      /* the guest runs its own copy of the game, so it moves every frame the
+         host does, not once per message */
+      tickReplica(dt);
+      const mine = renderView();
+      const k = paintKey(mine);
+      if (k !== lastPaintKey) { lastPaintKey = k; paint(); }
+      else draw(mine);
+    }
+  };
+  frame = requestAnimationFrame(step);
+}
+let lastPaintKey = '';
+function paintKey(s) {
+  return s.round + ':' + s.beat + ':' + (s.over || '-') +
+         ':' + (s.committed.A ? 'A' : '') + (s.committed.D ? 'D' : '') +
+         ':' + s.tempo + ':' + s.motion;
+}
+
+/* =========================================================================
+   A phone drives the room it owns, or asks for the one it does not.
+   ========================================================================= */
+function myRole() {
+  if (mode === 'solo') return roleOf(room, 1);
+  if (mode === 'host') return roleOf(room, 1);
+  if (mode === 'guest' && view) return roleOf({ holder: view.holder || 1 }, 2);
+  return null;
+}
+
+const beatKey = s => s.round + ':' + s.beat + ':' + (s.over || '-');
+
+function canAct() {
+  if (!view || view.over) return false;
+  if (mode === 'solo') return true;
+  if (view.tempo === 'live') return true;
+  const role = myRole();
+  return role ? !view.committed[role] : false;
+}
+
+function doPress(dir) {
+  if (!canAct()) return;
+  const role = myRole();
+  if (!role) return;
+
+  if (view.tempo === 'live') {
+    if (mode === 'solo') { room.held[role] = dir; paintHost(); }
+    else if (mode === 'host') room.held[role] = dir;
+    else { replicaSteer(role, dir); guestSend({ t: 'in', d: dir }); }
+    return;
+  }
+
+  if (chosen && mode !== 'solo') return;
+  if (mode === 'solo') { commit(room, role, dir); paintHost(); return; }
+  if (mode === 'host') { commit(room, role, dir); paintHost(); sendState(); return; }
+  chosen = true;
+  paint();
+  guestSend({ t: 'in', d: dir, first: true });
+}
+
+function doRelease() {
+  const role = myRole();
+  if (!role || !view || view.tempo !== 'live') return;
+  if (mode === 'solo' || mode === 'host') { room.held[role] = 0; paintHost(); }
+  else { replicaSteer(role, 0); guestSend({ t: 'in', stop: true }); }
+}
+
+function doTap(dir) {
+  const role = myRole();
+  if (!role || !view || view.tempo !== 'live' || view.motion !== 'snap') return;
+  if (mode === 'solo' || mode === 'host') room.tap[role] = dir;
+  else {
+    if (replica) { replica.tap = replica.tap || { A: 0, D: 0 }; replica.tap[role] = dir; }
+    guestSend({ t: 'in', d: dir, tap: true });
+  }
+}
+
+function doNext() {
+  if (!view || !view.over) return;
+  if (mode === 'solo') { nextRound(room); paintHost(); return; }
+  if (mode === 'host') { nextRound(room); paintHost(); sendState(); return; }
+  guestSend({ t: 'next' });
+}
+
+function paintHost() {
+  if (!room) return;
+  view = snapshot(room);
+  paint();
+}
+
+/* =========================================================================
+   Drawing
+   ========================================================================= */
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+/* Sizing the canvas is expensive, so it happens only when the size changes.
+
+   Assigning canvas.width throws away the backing store and reallocates it, and
+   reading parentElement.clientWidth forces the browser to flush layout. Doing
+   either every frame is invisible on a phone - the buffer is small - and
+   cripples a desktop window, where it is millions of pixels reallocated sixty
+   times a second. So the size is read only when something says it may have
+   changed: a resize, a rotation, or the first draw.
+
+   The density is capped by a pixel budget rather than a device ratio. A phone
+   at dpr 3 is around one megapixel, so it can have the full density and stay
+   crisp. A desktop window at dpr 3 wants twenty-one megapixels, which no eye
+   can tell apart from three and no canvas can fill at sixty frames a second.
+   The budget spends the pixels where they are needed and stops there. */
+const PIXEL_BUDGET = 2.4e6;
+let sized = { w: 0, h: 0, dpr: 0 };
+
+function crispDpr(w, h) {
+  const device = window.devicePixelRatio || 1;
+  const byBudget = Math.sqrt(PIXEL_BUDGET / Math.max(1, w * h));
+  return Math.max(1, Math.min(device, 3, byBudget));
+}
+
+/* The field hugs its canvas. The stage is capped at 520px wide, so on a desktop
+   window the pitch stays a pitch instead of growing into a wall; on a phone the
+   window is the limit and the field fills it. Sizing therefore comes from the
+   width, with the viewport height as the only other constraint - reading the
+   field's own height would be circular, since the field is sized by the
+   canvas. */
+function fit(force) {
+  const pitchW = (view && view.w) || 30;
+  const pitchH = (view && view.h) || 20;
+  const key = pitchW + 'x' + pitchH;
+
+  if (!force && sized.w && sized.pitch === key) return;
+
+  const availW = (cv.parentElement.clientWidth || 320) - 2;
+  const maxH = (window.innerHeight || 700) * 0.52;
+
+  let w = availW;
+  let h = Math.round(pitchH * (w / pitchW));
+  if (h > maxH) { h = Math.round(maxH); w = Math.round(pitchW * (h / pitchH)); }
+  w = Math.max(40, w); h = Math.max(27, h);
+
+  const dpr = crispDpr(w, h);
+
+  sized = { w, h, dpr, pitch: key };
+
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px';
+  cv.style.height = h + 'px';
+  cv._dpr = dpr; cv._w = w; cv._h = h; cv._s = w / pitchW;
+}
+
+/* The body has a minimum on-screen size. On a big pitch one field unit is only
+   a few pixels, so a body drawn in units would shrink to a speck exactly when
+   the field is hardest to read. The minimum is a floor, not a fixed size, so
+   the field still scales and only stops shrinking once it gets silly. */
+const MIN_R = 7;
+
+function head(p, color, trail) {
+  const s = cv._s, r = Math.max(MIN_R, .46 * s);
+
+  if (trail && trail.length > 1) {
+    ctx.beginPath();
+    trail.forEach(([x, y], i) => i ? ctx.lineTo(x * s, y * s) : ctx.moveTo(x * s, y * s));
+    ctx.strokeStyle = color; ctx.globalAlpha = .5; ctx.lineWidth = Math.max(1.5, 2);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+
+  ctx.beginPath(); ctx.arc(p.x * s, p.y * s, r, 0, 7);
+  ctx.fillStyle = color; ctx.globalAlpha = .3; ctx.fill(); ctx.globalAlpha = 1;
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(p.x * s, p.y * s);
+  ctx.lineTo(p.x * s + Math.cos(rad(p.a)) * r * 1.8, p.y * s + Math.sin(rad(p.a)) * r * 1.8);
+  ctx.stroke();
+}
+
+/* The head of a live run is drawn ahead of the body, so the line reads as a
+   thing in motion rather than a thing in place. */
+function streak(p, color, dir, role) {
+  if (!dir) return;
+  const s = cv._s;
+  ctx.beginPath();
+  ctx.moveTo(p.x * s, p.y * s);
+  ctx.lineTo((p.x + Math.cos(rad(p.a)) * 2.2) * s, (p.y + Math.sin(rad(p.a)) * 2.2) * s);
+  ctx.strokeStyle = color; ctx.globalAlpha = .2; ctx.lineWidth = 1.6;
+  ctx.setLineDash([2, 5]); ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1;
+}
+
+function draw(state) {
+  const st = state || view;
+  if (!st) return;
+  fit();
+  const s = cv._s, w = cv._w, h = cv._h;
+  ctx.setTransform(cv._dpr, 0, 0, cv._dpr, 0, 0);
+  ctx.fillStyle = '#080b0f'; ctx.fillRect(0, 0, w, h);
+
+  /* One path for the whole grid. Twenty separate strokes is twenty path setups
+     and twenty rasterisations; one path is one of each. */
+  const pw = st.w, ph = st.h;
+  ctx.beginPath();
+  for (let x = 2.5; x < pw; x += 2.5) { ctx.moveTo(x * s, 0); ctx.lineTo(x * s, h); }
+  for (let y = 2.5; y < ph; y += 2.5) { ctx.moveTo(0, y * s); ctx.lineTo(w, y * s); }
+  ctx.strokeStyle = '#151b24'; ctx.lineWidth = 1; ctx.stroke();
+
+  ctx.fillStyle = 'rgba(216,166,87,.12)';
+  ctx.fillRect(w - GOAL * s, 0, GOAL * s, h);
+  ctx.strokeStyle = 'rgba(216,166,87,.7)'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(w - GOAL * s, 0); ctx.lineTo(w - GOAL * s, h); ctx.stroke();
+
+  ctx.beginPath(); ctx.arc(st.d.x * s, st.d.y * s, Math.max(REACH * s, MIN_R * 1.35), 0, 7);
+  ctx.strokeStyle = 'rgba(127,158,199,.35)'; ctx.setLineDash([3, 6]); ctx.stroke(); ctx.setLineDash([]);
+
+  const role = myRole();
+  const mine = role ? (role === 'A' ? st.a : st.d) : null;
+  const color = role === 'A' ? '#d8a657' : '#7f9ec7';
+
+  if (st.tempo === 'live') {
+    if (role) streak(mine, color, 1, role);
+  } else if (canAct() && mine) {
+    /* the three things a beat lets you do: turn, or hold the line */
+    ctx.strokeStyle = color; ctx.globalAlpha = .5; ctx.lineWidth = 1.4;
+    ctx.setLineDash([5, 4]);
+    [-1, 0, 1].forEach(d => {
+      const aa = mine.a + d * QUANT;
+      const len = d === 0 ? 3.4 : 2.6;
+      ctx.beginPath();
+      ctx.moveTo(mine.x * s, mine.y * s);
+      ctx.lineTo((mine.x + Math.cos(rad(aa)) * len) * s, (mine.y + Math.sin(rad(aa)) * len) * s);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  /* The mates, drawn under the carrier so the carrier reads as the front of the
+     shape. They are derived from the chosen heading, so they turn with it.
+     Drawn as solid bodies with a faint fill: they block the defender, so they
+     have to look like something that could. */
+  const mateCol = c => c === 'A' ? 'rgba(216,166,87,' : 'rgba(127,158,199,';
+  const mate = (p, c) => {
+    const r = Math.max(4.2, .3 * s);
+    ctx.beginPath(); ctx.arc(p.x * s, p.y * s, r, 0, 7);
+    ctx.fillStyle = mateCol(c) + '.28)'; ctx.fill();
+    ctx.strokeStyle = mateCol(c) + '.9)'; ctx.lineWidth = 1.6; ctx.stroke();
+  };
+  matesOf(st, 'D').forEach(p => mate(p, 'D'));
+  matesOf(st, 'A').forEach(p => mate(p, 'A'));
+
+  head(st.d, '#7f9ec7', st.td);
+  head(st.a, '#d8a657', st.ta);
+
+  /* The ball is the thing that scores, so it is drawn as a thing: a white disc
+     with a dark rim, sitting off the carrier's front foot. The rim is what makes
+     it visible over the gold body it is born next to. */
+  const ball = ballAt(st);
+  ctx.beginPath(); ctx.arc(ball.x * s, ball.y * s, Math.max(3, .2 * s), 0, 7);
+  ctx.fillStyle = '#f6f4ef'; ctx.fill();
+  ctx.strokeStyle = '#0b0f14'; ctx.lineWidth = 1.2; ctx.stroke();
+}
+
+/* =========================================================================
+   Words
+   ========================================================================= */
+/* The bar answers the only question a first-time player has: how long have
+   I got? In a beat it is the window to commit; in a live run it is the round.
+   It moves every frame, so it is not part of the words. */
+function paintMeter(s) {
+  const meter = $('meter');
+  if (!meter) return;
+  if (s.over) { meter.hidden = true; return; }
+  meter.hidden = false;
+  const live = s.tempo === 'live';
+  const frac = live ? s.clock / CLOCK[s.variant]
+             : s.phase === 'choose' ? s.window / CHOOSE
+             : 1 - s.t / BEAT;
+  meter.classList.toggle('low', frac < 0.25);
+  meter.firstElementChild.style.transform = 'scaleX(' + Math.max(0, Math.min(1, frac)) + ')';
+}
+
+function paint() {
+  if (!view) { draw(); return; }
+
+  const key = beatKey(view);
+  if (key !== myBeatKey) { myBeatKey = key; chosen = false; }
+
+  const role = myRole();
+  const isAtt = role === 'A';
+  const live = view.tempo === 'live';
+  const mySeat = mode === 'guest' ? 2 : 1;
+  const iWon = view.winner === mySeat;
+
+  $('room').textContent = mode === 'solo' ? 'vs the line' : (hostCode || '');
+  /* Scores belong to players, so the left number is always MY score. An
+     attacking/defending label would be wrong the moment the ball swaps. */
+  const otherSeat = mySeat === 1 ? 2 : 1;
+  $('sa').textContent = view.score[mySeat];
+  $('sd').textContent = view.score[otherSeat];
+
+  /* The ball is the thing that swaps hands, so it is shown on the scoreline.
+     Without it a player cannot tell why they are suddenly defending. */
+  $('sa').parentElement.classList.toggle('ball', (view.holder || 1) === mySeat);
+  $('sd').parentElement.classList.toggle('ball', (view.holder || 1) === otherSeat);
+  $('me').className = 'me ' + (role ? (isAtt ? 'a' : 'd') : 'a');
+  $('me').innerHTML = role
+    ? 'you ' + (isAtt ? 'attack' : 'defend') + '<b>' + (isAtt ? '\u25b6' : '\u25c0') + '</b>'
+    : 'the line is the sentence';
+
+  const say = $('say'), sh = $('sh'), sp = $('sp');
+  const waiting = 'the other phone';
+
+  $('againWrap').hidden = !view.over;
+
+  if (view.matchOver && view.over) {
+    const won = view.roundsWon[mySeat] > view.roundsWon[mySeat === 1 ? 2 : 1];
+    say.className = 'say ' + (won ? 'win' : 'lose');
+    sh.textContent = won ? 'You take the match.' : 'They take the match.';
+    sp.textContent = 'First to two. Continue starts a new match.';
+  } else if (view.over === 'goal') {
+    say.className = 'say ' + (iWon ? 'win' : 'lose');
+    sh.textContent = iWon ? 'Through.' : 'They got through.';
+    sp.textContent = iWon
+      ? 'The ball crossed. You defend next round.'
+      : 'The ball crossed. You have the ball next round.';
+  } else if (view.over === 'tackle') {
+    say.className = 'say ' + (iWon ? 'win' : 'lose');
+    sh.textContent = iWon ? 'Read.' : 'Read wrong.';
+    sp.textContent = iWon
+      ? 'You arrived where the line was going.'
+      : 'They arrived where your line was going.';
+  } else if (view.over === 'time') {
+    say.className = 'say ' + (iWon ? 'win' : 'lose');
+    sh.textContent = iWon ? 'Held.' : 'Ran out.';
+    sp.textContent = 'The clock went before the ball did. A line that circles goes nowhere.';
+  } else if (live) {
+    say.className = 'say ' + (isAtt ? 'att' : 'def');
+    sh.textContent = isAtt ? 'Carry it over.' : 'Cut off the carrier.';
+    sp.textContent = isAtt
+      ? 'Hold a pad to bend. Your mates screen the defender; only the ball counts.'
+      : 'Hold a pad to bend. Aim where the carrier will be - its mates will slow you down.';
+  } else if (chosen || (role && view.committed[role])) {
+    say.className = 'say ' + (isAtt ? 'att' : 'def');
+    sh.textContent = 'Committed.';
+    sp.textContent = 'Waiting for ' + waiting + '.';
+  } else {
+    say.className = 'say ' + (isAtt ? 'att' : 'def');
+    sh.textContent = isAtt ? 'Your call, attacker.' : 'Your call, defender.';
+    sp.textContent = 'Turn, or wait and hold your line. Letting the beat run out is a real choice.';
+  }
+
+  const dots = $('dots');
+  dots.innerHTML = '';
+  ['A', 'D'].forEach(k => {
+    if (live) return;
+    const d = document.createElement('i');
+    d.className = 'dot' + (view.committed[k] ? ' on' + (k === 'D' ? ' d' : '') : '');
+    dots.appendChild(d);
+  });
+
+  /* The bar answers the only question a first-time player has: how long have
+     I got? In a beat it is the window to commit; in a live run it is the round. */
+  paintMeter(view);
+
+  const act = canAct();
+  ['padL', 'padR'].forEach(id => $(id).classList.toggle('idle', !act));
+  $('btnL').disabled = !act;
+  $('btnR').disabled = !act;
+  $('labL').textContent = live ? (isAtt ? 'bend left' : 'cut left') : 'turn left';
+  $('labR').textContent = live ? (isAtt ? 'bend right' : 'cut right') : 'turn right';
+
+  /* a guest's words describe the state that has arrived, so the picture is
+     the smoothed one too, or the two would disagree for a frame */
+  draw(mode === 'guest' ? renderView() : undefined);
+}
+
+/* =========================================================================
+   The door
+   ========================================================================= */
+function sentence() {
+  const v = variantOf(pickTempo, pickMotion);
+  const p = PITCHES[pickPitch];
+  $('sentence').textContent = v.replace('-', ', ') + ' — ' + MODES[v].line +
+    ' The pitch is ' + p.w + ' by ' + p.h + '.';
+  document.querySelectorAll('.axis button').forEach(b => {
+    const axis = b.dataset.axis === 'tempo' ? pickTempo
+               : b.dataset.axis === 'motion' ? pickMotion
+               : pickPitch;
+    b.setAttribute('aria-pressed', String(b.dataset.val === axis));
+  });
+}
+
+document.querySelectorAll('.axis button').forEach(b => {
+  b.onclick = () => {
+    if (b.dataset.axis === 'tempo') pickTempo = b.dataset.val;
+    else if (b.dataset.axis === 'motion') pickMotion = b.dataset.val;
+    else pickPitch = b.dataset.val;
+    sentence();
+  };
+});
+
+function showPick(msg) {
+  mode = 'door'; view = null; room = null;
+  hangUp();
+  $('pick').classList.remove('hidden');
+  $('lobby').classList.add('hidden');
+  $('door').classList.remove('hidden');
+  $('err').textContent = msg || '';
+  $('hint').textContent = '';
+}
+
+function openLobby(code) {
+  $('pick').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  $('door').classList.remove('hidden');
+  $('codeOut').textContent = code;
+  $('err').textContent = '';
+  $('hint').textContent = '';
+  $('shareWrap').classList.remove('hidden');
+}
+
+function hideDoor() { $('door').classList.add('hidden'); }
+
+function startSolo() {
+  mode = 'solo';
+  seat = 1;
+  room = newRoom(variantOf(pickTempo, pickMotion), true, pickPitch);
+  hostCode = '';
+  hangUp();
+  hideDoor();
+  paintHost();
+  startLoop();
+}
+
+$('host').onclick = () => { $('err').textContent = ''; startHost(); };
+$('solo').onclick = () => startSolo();
+
+$('join').onclick = () => {
+  const code = $('code').value.trim().toUpperCase();
+  if (code.length !== 4) { $('err').textContent = 'Four letters.'; return; }
+  $('err').textContent = '';
+  $('copied').textContent = '';
+  $('pick').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  $('door').classList.remove('hidden');
+  $('codeOut').textContent = code;
+  $('waitOut').textContent = 'Joining ' + code + '…';
+  $('shareWrap').classList.add('hidden');
+  startGuest(code);
+};
+
+$('share').onclick = () => {
+  const link = location.origin + location.pathname + '?room=' + hostCode +
+    '&v=' + variantOf(pickTempo, pickMotion) + '&p=' + pickPitch;
+  const text = 'Four ways to draw one line. Open this: ' + link;
+
+  /* Copying is the thing that always works, so it happens first and it is what
+     the button says. A phone that has a share sheet gets it too, after the link
+     is already on the clipboard - so cancelling the sheet still leaves the link
+     somewhere they can paste it. */
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(link).then(
+      () => { $('copied').textContent = 'Link copied. Paste it to them.'; },
+      () => { $('copied').textContent = 'Copy this: ' + link; });
+  } else {
+    $('copied').textContent = 'Copy this: ' + link;
+  }
+
+  if (navigator.share) {
+    navigator.share({ title: 'Four ways to draw one line', text, url: link }).catch(() => {});
+  }
+};
+
+$('build').textContent = 'build ' + BUILD_NO;
+$('code').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
+});
+$('code').addEventListener('keydown', e => { if (e.key === 'Enter') $('join').click(); });
+
+function joinFromLobby() {
+  const code = $('code2').value.trim().toUpperCase();
+  if (code.length !== 4) return;
+  $('err').textContent = '';
+  $('copied').textContent = '';
+  $('codeOut').textContent = code;
+  $('shareWrap').classList.add('hidden');
+  startGuest(code);
+}
+$('join2').onclick = joinFromLobby;
+$('code2').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
+});
+$('code2').addEventListener('keydown', e => { if (e.key === 'Enter') joinFromLobby(); });
+
+/* =========================================================================
+   Input
+
+   The same two pads serve all four modes. In a beat, a press is a commitment.
+   In a live run, holding bends and letting go holds the line - which is the
+   thing this page is asking about, so a press that is released still means
+   something.
+   ========================================================================= */
+const padL = $('btnL'), padR = $('btnR');
+
+padL.onpointerdown = e => { e.preventDefault(); onPad(-1, true); };
+padR.onpointerdown = e => { e.preventDefault(); onPad(1, true); };
+padL.onpointerup = e => { e.preventDefault(); onPad(-1, false); };
+padR.onpointerup = e => { e.preventDefault(); onPad(1, false); };
+padL.onpointercancel = () => onPad(-1, false);
+padR.onpointercancel = () => onPad(1, false);
+padL.onpointerleave = () => onPad(-1, false);
+padR.onpointerleave = () => onPad(1, false);
+
+function onPad(dir, down) {
+  if (!down) { held[dir] = 0; doRelease(); return; }
+  held[dir] = 1;
+  const live = view && view.tempo === 'live';
+  const snap = view && view.motion === 'snap';
+  if (live && snap) doTap(dir);
+  else doPress(dir);
+}
+
+const held = { '-1': 0, 1: 0 };
+
+/* A held pad in a live, curving run must keep steering even if the finger does
+   not move, so the direction is resent on a quiet tick. In a live snap the pad
+   is a tap, not a hold, so nothing is resent - a resend would turn it into a
+   continuous bend and quietly merge the two variants. */
+setInterval(() => {
+  if (!view || view.tempo !== 'live' || view.motion !== 'arc') return;
+  if (mode !== 'guest') return;
+  const dir = held[-1] ? -1 : held[1] ? 1 : 0;
+  guestSend({ t: 'in', d: dir });
+}, 180);
+
+$('again').onclick = () => doNext();
+
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (!view) return;
+  if (e.key === 'ArrowLeft' || e.key === 'a') { e.preventDefault(); onPad(-1, true); }
+  else if (e.key === 'ArrowRight' || e.key === 'd') { e.preventDefault(); onPad(1, true); }
+  else if (e.key === 'Enter' && view.over) doNext();
+});
+window.addEventListener('keyup', e => {
+  if (e.key === 'ArrowLeft' || e.key === 'a') onPad(-1, false);
+  else if (e.key === 'ArrowRight' || e.key === 'd') onPad(1, false);
+});
+
+/* A new window size is the one moment the canvas must be re-measured. */
+window.addEventListener('resize', () => {
+  fit(true);
+  if (view) draw();
+});
+window.addEventListener('orientationchange', () => setTimeout(() => {
+  fit(true);
+  if (view) draw();
+}, 200));
+
+/* One reading of the live state, for the console and for a probe. */
+window.__four = () => ({
+  mode, seat, view, room, code: hostCode,
+  linked: !!(mq && mq.api), joined,
+  variant: room ? room.variant : null
+});
+
+/* Start: a link with ?room= drops straight into a game. */
+(function () {
+  const q = new URLSearchParams(location.search);
+  const code = (q.get('room') || '').toUpperCase();
+  const v = q.get('v') || '';
+  if (MODES[v]) {
+    pickTempo = MODES[v].tempo;
+    pickMotion = MODES[v].motion;
+  }
+  const p = q.get('p') || '';
+  if (PITCHES[p]) pickPitch = p;
+  sentence();
+
+  if (code.length === 4) {
+    $('code').value = code;
+    $('pick').classList.add('hidden');
+    $('lobby').classList.remove('hidden');
+    $('shareWrap').classList.add('hidden');
+    $('codeOut').textContent = code;
+    startGuest(code);
+  } else {
+    showPick('');
+  }
+})();
+</script>
+</body>
+</html>
+
