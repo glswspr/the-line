@@ -162,7 +162,6 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 /* =========================================================================
    The rules. One copy, one owner: this block is the whole game.
@@ -325,19 +324,30 @@ function snapshot(room) {
    The wire.
 
    A turn-based game needs no simulation to stay in step: it needs a way for
-   two browsers to exchange about ten small messages a turn. A WebRTC data
-   channel through PeerJS's public broker is that pipe, and the broker only
-   matches the two of them - the messages go straight between the phones.
+   two browsers to exchange about ten small messages a turn.
 
-   Whatever proves the link is up, only one function acts on it, because there
-   are three ways to learn it and they can all fire.
+   A direct browser-to-browser link (WebRTC) needs the two machines to reach
+   each other through their routers. That works between two tabs on one
+   machine, and between two phones on one wifi, and it fails between a phone on
+   mobile data and a PC at home. That failure is silent: the link simply never
+   opens.
+
+   So the two phones do not talk to each other at all. Both talk outward to a
+   public MQTT broker over a WebSocket, which every network allows, and the
+   broker passes the messages between them. Neither phone needs a reachable
+   address.
+
+   There are two topics per room: the host listens on one, the guest on the
+   other. That is what makes "who is the host" unambiguous, and it means a
+   phone never receives its own message back.
    ========================================================================= */
 const $ = id => document.getElementById(id);
 const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-const PREFIX = 'the-line-b7-';
+const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+const TOPIC = 'theline/v8/';
 
 let mode = 'door';        /* 'door' | 'hotseat' | 'host' | 'guest' */
-const BUILD = 7;
+const BUILD = 8;
 let seat = 1;             /* 1 or 2; the role is read from the round */
 let room = null;          /* the authority: this browser, when hosting or alone */
 let view = null;          /* the last state this phone drew */
@@ -345,10 +355,11 @@ let myBeatKey = '';       /* so a press is forgotten exactly when the beat chang
 let sent = false;         /* already pressed this beat */
 
 let hostCode = '';
-let peer = null, conn = null;
+let mq = null;            /* the broker link */
 let joined = false;
 let knockTimer = 0;
 let tickTimer = 0;
+let retryTimer = 0;
 
 function randCode() {
   let s = '';
@@ -356,60 +367,135 @@ function randCode() {
   return s;
 }
 
-function wireAvailable() { return typeof Peer === 'function'; }
+function wireAvailable() { return typeof WebSocket === 'function'; }
+
+/* -------------------------------------------------------------------------
+   A minimal MQTT 3.1.1 client: connect, subscribe, publish, ping.
+   Nothing else is needed, so nothing else is here.
+   ------------------------------------------------------------------------- */
+const enc = s => [...new TextEncoder().encode(s)];
+const varint = n => { const a = []; do { let d = n % 128; n = Math.floor(n / 128); if (n > 0) d |= 128; a.push(d); } while (n > 0); return a; };
+const str = s => { const b = enc(s); return [b.length >> 8, b.length & 255].concat(b); };
+
+function mqConnect({ onReady, onMessage, onFail }) {
+  let ws;
+  try { ws = new WebSocket(BROKER, ['mqtt']); }
+  catch (e) { onFail && onFail('cannot open'); return null; }
+
+  const clientId = 'line' + Math.random().toString(36).slice(2, 12);
+  let buf = new Uint8Array(0);
+  let alive = false;
+  let pinger = 0;
+
+  const send = bytes => { try { ws.send(new Uint8Array(bytes).buffer); } catch (e) {} };
+
+  const link = {
+    api: null,
+    close() { clearInterval(pinger); alive = false; try { ws.close(); } catch (e) {} }
+  };
+
+  ws.onopen = () => {
+    ws.binaryType = 'arraybuffer';
+    const vh = [].concat(str('MQTT'), [4, 0x02, 0, 60], str(clientId));
+    send([0x10, ...varint(vh.length), ...vh]);
+  };
+
+  ws.onmessage = evt => {
+    const chunk = new Uint8Array(evt.data);
+    const merged = new Uint8Array(buf.length + chunk.length);
+    merged.set(buf); merged.set(chunk, buf.length);
+    buf = merged;
+
+    /* A packet can arrive split, or several at once, so read as many whole
+       ones as the buffer holds. */
+    for (;;) {
+      if (buf.length < 2) return;
+      let mult = 1, len = 0, i = 1, byte;
+      do {
+        if (i >= buf.length) return;
+        byte = buf[i++];
+        len += (byte & 127) * mult;
+        mult *= 128;
+      } while (byte & 128);
+
+      if (buf.length < i + len) return;
+      const type = buf[0] >> 4;
+      const body = buf.slice(i, i + len);
+      buf = buf.slice(i + len);
+
+      if (type === 2) {                      /* CONNACK: we are on the broker */
+        alive = true;
+        link.api = {
+          subscribe(topic) {
+            const b = [].concat([0x00, 0x01], str(topic), [0x00]);
+            send([0x82, ...varint(b.length), ...b]);
+          },
+          publish(topic, payload) {
+            const b = [].concat(str(topic), enc(payload));
+            send([0x30, ...varint(b.length), ...b]);
+          }
+        };
+        onReady && onReady(link.api);
+      } else if (type === 3) {               /* PUBLISH */
+        const tlen = (body[0] << 8) | body[1];
+        const payload = new TextDecoder().decode(body.slice(2 + tlen));
+        onMessage && onMessage(payload);
+      }
+    }
+  };
+
+  ws.onclose = () => { alive = false; link.api = null; onFail && onFail('closed'); };
+  ws.onerror = () => {};
+
+  /* Brokers drop idle clients, so say something every 25 seconds. */
+  clearInterval(pinger);
+  pinger = setInterval(() => { if (alive) send([0xC0, 0x00]); }, 25000);
+
+  return link;
+}
 
 function hangUp() {
-  clearInterval(knockTimer); clearInterval(tickTimer);
-  knockTimer = 0; tickTimer = 0;
-  try { if (conn) conn.close(); } catch (e) {}
-  try { if (peer) peer.destroy(); } catch (e) {}
-  conn = null; peer = null;
+  clearInterval(knockTimer); clearInterval(tickTimer); clearInterval(retryTimer);
+  knockTimer = tickTimer = retryTimer = 0;
+  if (mq) { try { mq.close(); } catch (e) {} }
+  mq = null;
+  joined = false;
 }
 
 /* ---- host ---- */
+const hostTopic = code => TOPIC + code + '/toHost';
+const guestTopic = code => TOPIC + code + '/toGuest';
+
 function startHost() {
   if (!wireAvailable()) {
-    $('err').textContent = 'The connection code did not load. Check the wifi and reload.';
+    $('err').textContent = 'This browser cannot use WebSockets. Try another browser.';
     return;
   }
   hangUp();
   mode = 'host';
   seat = 1;
   room = newRoom(false);
-  joined = false;
   view = null;
   hostCode = randCode();
 
   openLobby(hostCode);
-  $('waitOut').textContent = 'Waiting for the other phone.';
+  $('waitOut').textContent = 'Opening…';
 
-  peer = new Peer(PREFIX + hostCode, { debug: 0 });
-
-  peer.on('open', () => {
-    $('waitOut').textContent = 'Waiting for the other phone.';
-  });
-
-  peer.on('connection', c => {
-    if (conn && conn.open) { try { c.close(); } catch (e) {} return; }
-    conn = c;
-    /* Three ways, one action. PeerJS does not always raise `open` on the side
-       that received the connection, so the guest's first message counts too. */
-    c.on('open', hostJoined);
-    c.on('data', onGuestMessage);
-    c.on('close', () => { conn = null; if (mode === 'host') { joined = false;
-      $('waitOut').textContent = 'They left. The code still works.';
-      openLobby(hostCode); } });
-    c.on('error', () => {});
-    if (c.open) hostJoined();
-  });
-
-  peer.on('error', e => {
-    if (e && e.type === 'unavailable-id') {
-      try { peer.destroy(); } catch (err) {}
-      startHost();
-      return;
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(hostTopic(hostCode));
+      if (mode === 'host' && !joined) $('waitOut').textContent = 'Waiting for the other phone.';
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onGuestMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'host') return;
+      $('err').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'host') startHost(); }, 2500);
     }
-    $('err').textContent = 'Could not open a game: ' + (e && e.type ? e.type : 'unknown') + '.';
   });
 }
 
@@ -438,8 +524,8 @@ function onGuestMessage(msg) {
 }
 
 function pushState() {
-  if (mode !== 'host' || !room || !conn || !conn.open) return;
-  try { conn.send({ t: 'state', s: snapshot(room) }); } catch (e) {}
+  if (mode !== 'host' || !room || !mq || !mq.api) return;
+  try { mq.api.publish(guestTopic(hostCode), JSON.stringify({ t: 'state', s: snapshot(room) })); } catch (e) {}
 }
 
 /* The host repeats the state on a slow tick. One lost message would otherwise
@@ -454,7 +540,7 @@ function startTicker() {
 /* ---- guest ---- */
 function startGuest(code) {
   if (!wireAvailable()) {
-    $('err').textContent = 'The connection code did not load. Check the wifi and reload.';
+    $('err').textContent = 'This browser cannot use WebSockets. Try another browser.';
     return;
   }
   hangUp();
@@ -463,44 +549,26 @@ function startGuest(code) {
   hostCode = code;
   view = null;
   $('waitOut').textContent = 'Joining ' + code + '…';
-  joinTry(code, 1);
-}
 
-function joinTry(code, attempt) {
-  try { if (peer) peer.destroy(); } catch (e) {}
-  conn = null;
-
-  peer = new Peer({ debug: 0 });
-
-  peer.on('open', () => {
-    if (mode !== 'guest') return;
-    conn = peer.connect(PREFIX + code, { reliable: true });
-
-    const hello = () => { try { if (conn && conn.open) conn.send({ t: 'hello' }); } catch (e) {} };
-
-    conn.on('open', () => { $('room').textContent = code; hello(); knockLater(hello); });
-    conn.on('data', onHostMessage);
-    conn.on('close', () => { clearInterval(knockTimer); knockTimer = 0; linkLost(); });
-    conn.on('error', () => {});
-  });
-
-  peer.on('error', e => {
-    const type = e && e.type;
-    if (type === 'peer-unavailable' && attempt < 10) {
-      /* the host may not have opened yet; the code is not wrong, just early */
-      setTimeout(() => { if (mode === 'guest') joinTry(code, attempt + 1); }, 1200);
-      return;
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(guestTopic(code));
+      const hello = () => {
+        try { if (api && mode === 'guest') api.publish(hostTopic(code), JSON.stringify({ t: 'hello' })); } catch (e) {}
+      };
+      hello();
+      knockLater(hello);
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onHostMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'guest') return;
+      $('err').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'guest') startGuest(hostCode); }, 2500);
     }
-    if (type === 'peer-unavailable') {
-      showPick('No answer from ' + code + '. Check the four letters, and that the' +
-               ' other phone still shows them.');
-      return;
-    }
-    if (attempt < 3 && (type === 'network' || type === 'server-error' || type === 'socket-error')) {
-      setTimeout(() => { if (mode === 'guest') joinTry(code, attempt + 1); }, 1500);
-      return;
-    }
-    $('err').textContent = 'Could not connect: ' + (type || 'unknown') + '.';
   });
 }
 
@@ -511,8 +579,12 @@ function knockLater(hello) {
   let tries = 0;
   knockTimer = setInterval(() => {
     if (mode !== 'guest' || view) { clearInterval(knockTimer); knockTimer = 0; return; }
-    if (++tries > 20) { clearInterval(knockTimer); knockTimer = 0;
-      showPick('No answer from ' + hostCode + '.'); return; }
+    if (++tries > 25) {
+      clearInterval(knockTimer); knockTimer = 0;
+      showPick('No answer from ' + hostCode + '. Check the four letters, and that the' +
+               ' other phone still shows them.');
+      return;
+    }
     hello();
   }, 1000);
 }
@@ -580,7 +652,7 @@ function doPress(dir) {
     return;
   }
   if (mode === 'guest') {
-    try { if (conn && conn.open) conn.send({ t: 'press', d: dir }); } catch (e) {}
+    try { if (mq && mq.api) mq.api.publish(hostTopic(hostCode), JSON.stringify({ t: 'press', d: dir })); } catch (e) {}
     paint();
   }
 }
@@ -589,7 +661,9 @@ function doNext() {
   if (!view || !view.over) return;
   if (mode === 'host') { nextRound(room); paintHost(); pushState(); return; }
   if (mode === 'hotseat') { nextRound(room); paintHost(); return; }
-  if (mode === 'guest') { try { if (conn && conn.open) conn.send({ t: 'next' }); } catch (e) {} }
+  if (mode === 'guest') {
+    try { if (mq && mq.api) mq.api.publish(hostTopic(hostCode), JSON.stringify({ t: 'next' })); } catch (e) {}
+  }
 }
 
 /* the authority paints from its own room, every phone from the wire */
@@ -874,7 +948,7 @@ window.addEventListener('orientationchange', () => setTimeout(() => { if (view) 
 
 /* One reading of the live state, for the console and for a probe. */
 window.__line = () => ({ mode, seat, view, room, code: hostCode,
-                         linked: !!(conn && conn.open), joined });
+                         linked: !!(mq && mq.api), joined });
 
 /* =========================================================================
    Start: a link with ?room= drops straight into a game.
