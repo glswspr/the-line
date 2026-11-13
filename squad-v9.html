@@ -1,0 +1,2579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Squad</title>
+<style>
+:root{
+  --bg:#0d1117; --ink:#e7e9ee; --dim:#7d8797; --line:#1d2733;
+  --accent:#e0b055; --blue:#7fb0e8; --panel:#131b25;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:var(--bg); color:var(--ink);
+  font:400 15px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  overscroll-behavior:none; touch-action:none;
+  display:flex; flex-direction:column; align-items:center;
+  /* svh, not dvh. dvh is the viewport with the browser's toolbars HIDDEN, so on a
+     phone whose address bar overlays the page the bottom row sits underneath it -
+     which is exactly the "buttons are pushed outside and hidden" report. svh is
+     the smallest the viewport ever gets, toolbars showing, so the controls are on
+     screen in both states. vh first as a fallback for anything without svh. */
+  height:100vh; height:100svh; overflow:hidden;
+}
+/* The whole page must fit without scrolling: overflow is hidden, so anything
+   taller than the viewport is clipped and cannot be reached at all. Every row
+   below is either content-height or takes the leftover space. */
+.wrap{
+  width:100%;max-width:520px;height:100%;
+  display:flex; flex-direction:column;
+  padding:4px 10px max(8px, env(safe-area-inset-bottom));
+  gap:6px; min-height:0;
+}
+.top{display:flex;align-items:center;justify-content:space-between;font-size:13px;letter-spacing:.02em}
+.top .who{color:var(--accent);font-weight:600}
+.top .who.d{color:var(--blue)}
+.sc{font-variant-numeric:tabular-nums;color:var(--ink)}
+.sc b{color:var(--accent);font-weight:600}
+.sc i{color:var(--blue);font-style:normal;font-weight:600}
+.sc .sep{color:var(--dim);margin:0 6px}
+/* The field takes the leftover height and starts at its TOP. It used to be
+   centred inside its box, and because a portrait field is limited by the screen's
+   WIDTH it never fills the height - so half of that unused height sat above it as
+   a dead band under the score. Aligned to the top, the slack falls below the field
+   where it reads as breathing room instead of a mistake. */
+/* The field is width-limited on a portrait phone, so it cannot use the spare
+   height on a tall screen. Rather than leaving that height as a dead band, the
+   pads take it: bigger thumb targets on tall screens, shrinking on short ones.
+   The field row is sized by the canvas itself, which fit() sets in pixels. */
+/* The field row holds exactly the canvas, plus the top band fit() assigns it. */
+.fieldbox{width:100%;display:flex;justify-content:center;align-items:flex-start;
+  flex:0 0 auto;min-height:0;overflow:hidden}
+
+/* THERE ARE NO CONTROLS. The whole screen is the controller.
+
+   A stick and two buttons were three targets to find with a thumb while watching
+   a ball. So they are gone, and the gestures are the interface:
+
+     drag anywhere   the heading from where the thumb LANDED to where it is now.
+                     A short drag jogs, a long drag sprints - effort is distance.
+     tap             pass along the heading you were last holding.
+     double tap      shoot along the same heading.
+
+   The empty space under the pitch is not empty: it is where a thumb rests, so the
+   anchor usually sits there and never covers the play. */
+#gest{position:fixed;inset:0;pointer-events:none;z-index:5;display:none}
+#gest.on{display:block}
+#ganchor{
+  position:absolute;width:66px;height:66px;margin:-33px 0 0 -33px;border-radius:50%;
+  border:1px solid rgba(255,255,255,.20);
+}
+#gline{
+  position:absolute;height:2px;border-radius:2px;
+  background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(255,255,255,.42));
+  transform-origin:0 50%;
+}
+#gknob{
+  position:absolute;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;
+  background:rgba(255,255,255,.10);border:2px solid rgba(255,255,255,.55);
+  transition:background .06s linear,border-color .06s linear;
+}
+#gknob.sprint{background:rgba(224,176,85,.24);border-color:var(--accent)}
+
+/* The only instruction on the playing screen, and it retires itself on the first
+   drag. It lives in the thumb space rather than over the pitch, so it never hides
+   the ball.
+
+   It also OWNS that space, as a flexible row rather than as margins on the field.
+   Margins on the field plus an auto-margin here were two things claiming the same
+   leftover height, and the total came out 6px taller than the screen - enough to
+   make the page scroll under a thumb that is trying to drag. */
+.hint{
+  flex:1 1 auto;min-height:0;overflow:hidden;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;
+  padding-top:12px;
+  text-align:center;
+  color:#4e5a6b;font-size:12.5px;letter-spacing:.02em;line-height:1.7;
+  transition:opacity .5s linear;
+}
+.hint.gone{opacity:0}
+.hint b{color:#8d99a9;font-weight:600}
+
+canvas{display:block;border-radius:12px;background:#0a0f15;border:1px solid var(--line);max-width:100%;max-height:100%}
+.cap{text-align:center;color:var(--dim);font-size:13px;line-height:1.3;flex:0 0 auto;min-height:34px}
+.cap b{color:var(--ink);font-weight:650}
+
+/* The how-to card: three rows, an icon and a sentence each. It is the only
+   instruction anywhere, so it has to be readable at arm's length on a phone. */
+.goal-line{margin:0;color:var(--ink);font-size:14.5px;line-height:1.45}
+.gold{color:var(--accent)}
+.blue{color:var(--blue)}
+.how{display:flex;flex-direction:column;gap:14px;margin:4px 0}
+.howrow{display:grid;grid-template-columns:56px 1fr;gap:12px;align-items:start}
+.howicon{
+  height:44px;border-radius:11px;border:1px solid var(--line);background:var(--panel);
+  display:flex;align-items:center;justify-content:center;
+  font:700 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.06em;color:var(--dim);
+}
+.howicon.on{background:#3a2f18;border-color:var(--accent);color:var(--accent);font-size:14px}
+.howrow b{display:block;font-size:14px;font-weight:650;margin-bottom:3px}
+/* Emphasis inside a sentence must stay in the sentence. `display:block` on every
+   <b> broke each explanation into one line per emphasised word, which is what made
+   this card look like a pile of fragments. */
+.howrow span{display:block;color:var(--dim);font-size:12.5px;line-height:1.45}
+.howrow span b{display:inline;font-weight:650;margin:0}
+.howfoot{margin:0;color:var(--dim);font-size:12.5px;line-height:1.45}
+
+canvas{display:block;border-radius:12px;background:#0a0f15;border:1px solid var(--line);max-width:100%;max-height:100%}
+
+.door{
+  position:fixed;inset:0;background:rgba(9,13,19,.94);backdrop-filter:blur(4px);
+  display:flex;align-items:center;justify-content:center;padding:24px;z-index:10;
+}
+.door.hidden{display:none}
+.card{width:100%;max-width:380px;display:flex;flex-direction:column;gap:14px}
+.card h1{margin:0;font:600 21px/1.25 ui-sans-serif,system-ui,sans-serif;letter-spacing:-.01em}
+.card p{margin:0;color:var(--dim);font-size:13.5px}
+.card .k{color:var(--ink)}
+.door .go{
+  margin-top:4px;padding:15px;border-radius:12px;border:0;
+  background:var(--accent);color:#1a1206;font:700 14px/1 ui-sans-serif,system-ui,sans-serif;
+  letter-spacing:.04em;text-transform:uppercase;
+}
+.build{color:#4c5666;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.joinrow{display:grid;grid-template-columns:1fr auto;gap:8px}
+.joinrow input{
+  min-width:0;padding:14px 12px;border-radius:12px;border:1px solid var(--line);
+  background:#0b1219;color:var(--ink);font:600 18px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.24em;text-align:center;text-transform:uppercase;
+}
+.joinrow input::placeholder{color:#38445a;letter-spacing:.1em}
+.join{
+  padding:0 18px;border-radius:12px;border:1px solid var(--line);
+  background:var(--panel);color:var(--ink);
+  font:700 13px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.06em;text-transform:uppercase;
+}
+.solo{
+  padding:13px;border-radius:12px;border:1px solid var(--line);
+  background:transparent;color:var(--dim);
+  font:600 13px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;
+}
+.err{color:#e0776b;font-size:12.5px;min-height:16px}
+.code{
+  font:700 34px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.3em;color:var(--accent);text-align:center;padding:6px 0;
+}
+.share{text-align:center;font-size:12.5px}
+.opts{display:flex;flex-direction:column;gap:10px;margin-top:2px}
+.opt{display:flex;flex-direction:column;gap:6px}
+.opt > span{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+.axis{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px}
+.axis button{
+  padding:11px 4px;border-radius:10px;border:1px solid var(--line);
+  background:var(--panel);color:var(--dim);
+  font:600 12px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;
+}
+.axis button[aria-pressed="true"]{
+  background:#2b2418;border-color:var(--accent);color:var(--accent);
+}
+.axis button:disabled{opacity:.45}
+.wait{text-align:center;color:var(--dim);font-size:12.5px}
+.go:disabled{opacity:.45}
+.over{
+  position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(9,13,19,.86);z-index:9;padding:24px;
+}
+.over.hidden{display:none}
+.over .card{align-items:flex-start}
+.over .go{width:100%}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="who" id="who">You attack</div>
+    <div class="sc">
+      <b id="sa">0</b><span class="sep">·</span><i id="sb">0</i>
+      <span class="sep">|</span><span id="clock" style="color:var(--dim)">30</span>
+    </div>
+  </div>
+  <div class="fieldbox"><canvas id="c"></canvas></div>
+  <div class="cap" id="cap"></div>
+  <div class="hint" id="hint">
+    <span><b>Drag</b> anywhere to run that way</span>
+    <span><b>Tap</b> to pass &nbsp;·&nbsp; <b>double tap</b> to shoot</span>
+  </div>
+</div>
+<div id="gest">
+  <div id="ganchor"></div>
+  <div id="gline"></div>
+  <div id="gknob"></div>
+</div>
+
+<div class="door" id="door">
+  <div class="card">
+    <h1>Two players, one ball.</h1>
+    <p class="goal-line">Get the ball into <b class="gold">your goal</b>. They are trying to
+       get it into <b class="blue">theirs</b>, at the other end.</p>
+
+    <button class="go" id="host">Play someone</button>
+    <div class="joinrow">
+      <input id="code" maxlength="4" inputmode="latin" autocapitalize="characters"
+             autocomplete="off" spellcheck="false" placeholder="CODE" aria-label="Room code">
+      <button class="join" id="join">Join</button>
+    </div>
+    <button class="solo" id="go">Play the bot</button>
+    <div class="build" id="build">build 1</div>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<!-- The controls, once, before play. Two a page. It stays until the player
+     presses, because a card that vanishes on a timer is one you read while
+     losing. -->
+<div class="door hidden" id="howto">
+  <div class="card">
+    <h1>How to play</h1>
+    <p class="goal-line">Touch anywhere and the whole screen is your stick.</p>
+    <div class="how">
+      <div class="howrow">
+        <div class="howicon on">→</div>
+        <div><b>Drag to run</b><span>Put a thumb down and push. The direction you push is
+          the way you run. Push further out to <b class="gold">sprint</b>.</span></div>
+      </div>
+      <div class="howrow">
+        <div class="howicon">TAP</div>
+        <div><b>Tap to pass</b><span>One tap plays the ball the way you were
+          last pointing.</span></div>
+      </div>
+      <div class="howrow">
+        <div class="howicon">TAP×2</div>
+        <div><b>Double tap to shoot</b><span>Hard and flat, the same direction. A body in
+          the way still stops it.</span></div>
+      </div>
+    </div>
+    <p class="howfoot">Whoever catches the ball is the player you steer, automatically.
+       Take it off them anywhere and you keep playing, both ways round.</p>
+    <button class="go" id="howgo">Start</button>
+  </div>
+</div>
+
+<!-- The lobby. Both players see it. The host chooses; the guest watches. The
+     choices live here rather than on the field because they are part of starting
+     the game, not part of playing it. -->
+<div class="door hidden" id="lobby">
+  <div class="card">
+    <h1 id="lobbyTitle">Room</h1>
+    <div class="code" id="codeOut">----</div>
+    <p class="share" id="shareHint">The other phone types this code.</p>
+
+    <div class="opts" id="opts">
+      <div class="opt">
+        <span>Field</span>
+        <div class="axis" data-axis="pitch">
+          <button data-val="short">short</button>
+          <button data-val="normal">normal</button>
+          <button data-val="long">long</button>
+          <button data-val="huge">huge</button>
+        </div>
+      </div>
+      <div class="opt">
+        <span>Speed</span>
+        <div class="axis" data-axis="pace">
+          <button data-val="slow">slow</button>
+          <button data-val="normal">normal</button>
+          <button data-val="fast">fast</button>
+        </div>
+      </div>
+      <div class="opt">
+        <span>Squad</span>
+        <div class="axis" data-axis="squad">
+          <button data-val="2">two</button>
+          <button data-val="3">three</button>
+          <button data-val="5">five</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="wait" id="waitOut">Opening…</div>
+    <button class="go" id="start" disabled>Waiting for the other phone</button>
+    <div class="err" id="lobbyErr"></div>
+  </div>
+</div>
+
+<div class="over hidden" id="over">
+  <div class="card">
+    <h1 id="overTitle">—</h1>
+    <p id="overBody"></p>
+    <button class="go" id="again">Play again</button>
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   SQUAD - a control-scheme test.
+
+   Same world as four.html: a carrier, a defender, a goal on the right. What
+   changes is only how a player asks for a heading. Before, a press bent the
+   line by 45 degrees relative to wherever it pointed. Now an eight-way stick
+   names an absolute heading.
+
+   The important part, and the thing this page exists to check: naming a
+   heading does not move the body there. The body still slews toward that
+   heading at its turn rate, so momentum and the turning circle are untouched,
+   and the trajectory is still a curve you have to read.
+   ========================================================================= */
+
+/* Bumped for every publish. Each build is served under its own file name because
+   GitHub Pages and phone browsers cache HTML, and a cached page runs old code
+   that looks live. The build number is printed on the door so it is obvious. */
+const BUILD = 9;
+
+/* ---- the three things the host chooses ----
+
+   They are a table, not constants sprinkled through the physics, because both
+   phones have to agree about them: the guest is told the choice in the lobby and
+   simulates the same world. A number that lives only in the host's head would
+   put the two copies in different games. */
+/* ---- the field ----
+
+   Portrait, because the phone is portrait. A wide field on a narrow screen is a
+   strip too small to read; turning it round fills the screen and the goal sits at
+   the top, which is the direction you are trying to go.
+
+   Each seat defends its own end and attacks the other, so both players are
+   attacking and defending at the same time - the whole point of the turnover
+   rule. */
+const PITCHES = {
+  short:  { w: 15, h: 22, label: 'short'  },
+  normal: { w: 20, h: 30, label: 'normal' },
+  long:   { w: 26, h: 40, label: 'long'   },
+  huge:   { w: 34, h: 52, label: 'huge'   },
+};
+/* Game speed. This is a multiplier on every speed below, so it scales the whole
+   world at once and the balance between attacker and defender survives it. */
+const PACES = {
+  slow:   { m: 0.75, label: 'slow'   },
+  normal: { m: 1.00, label: 'normal' },
+  fast:   { m: 1.40, label: 'fast'   },
+};
+
+/* Squad size. Three is the shape the field was tuned for; two is tighter and
+   five is crowded, which is exactly what the host is choosing between. */
+const SQUADS = { 2: 'two', 3: 'three', 5: 'five' };
+
+/* The goal mouth. A narrow mouth made scoring a knife-edge that a body circling a
+   wall could never find; a generous one makes the goal a place you attack rather
+   than a pixel you hit. */
+const GOAL = 1.2;              /* depth, in field units */
+const MOUTH = 0.58;            /* fraction of the width that counts as the goal */
+
+/* Is a point inside a seat's goal mouth? Used for scoring and for keeping the
+   ball in play. */
+function inMouth(g, x) {
+  const w = g.w * MOUTH;
+  return Math.abs(x - g.w / 2) <= w / 2;
+}
+const REACH = 0.95;       /* how close a defender must be to the BALL to win it */
+/* How far apart two bodies must stay. This is a balance number, not a cosmetic
+   one, and it was the reason the game felt unwinnable.
+
+   A defender cannot stand on top of the carrier, so it stops BLOCK away. The ball
+   rides 0.55 in front of the carrier, so a defender running HEAD-ON gets within
+   BLOCK - 0.55 of the ball. At BLOCK 1.0 that is 0.45 against a REACH of 0.95: a
+   defender in front took the ball without ever getting past you, so running at the
+   goal was a guaranteed loss.
+
+   Proven with a mirror match - the identical policy on both seats, which is the
+   only fairness test that cannot be argued with:
+     BLOCK 1.0  -> 14 - 0 to the seat that starts with it
+     BLOCK 1.3  -> 7 - 7
+     BLOCK 1.6  -> 13 - 0 the other way
+   1.3 is the point where a duel is a contest. It is also 1.55 body diameters, so
+   the formation still reads as bodies rather than as a gap. */
+const BLOCK = 1.3;        /* bodies cannot overlap closer than this */
+const R = 0.42;           /* drawn body radius */
+
+/* Base speeds, keyed by ROLE - and role now means possession, so it flips on
+   every turnover without anything else having to change.
+
+   The side without the ball is faster. That is simply true of football: a player
+   running without the ball outruns one dribbling with it. It also fixes a
+   structural fault: at equal speeds a chase from behind can never close, because
+   the ball rides 1.05 units ahead of the carrier, so a defender directly behind
+   is never nearer than about 2.0 to it - against a reach of 0.95, a tackle was
+   impossible and possession never once changed hands in twenty-four rounds.
+
+   The consequence is the game: winning the ball costs you speed, so possession
+   naturally goes back and forth instead of being a single coin flip. */
+/* HE FEELS SLOW, SO THESE ARE THE NUMBERS THAT MAKE HIM FAST.
+
+   Measured before changing anything (a 20 x 30 pitch, body radius 0.42):
+
+     a reversal took      923 ms
+     a quarter turn took  462 ms
+     crossing the pitch   13.6 s
+     movement read at     2.6 body-widths per second
+
+   A reversal approaching a full second is the "sluggish" - it means the game
+   answers you late, not that it is played slowly. These values cut it to 346 ms
+   and a quarter turn to 173 ms, and raise the read of motion to about 3 body-widths
+   a second, which is the point at which a moving thing looks like it is moving
+   rather than sliding.
+
+   The balance between the two roles is untouched: the side without the ball is
+   still ~10% faster, which is what makes a turnover a swing. */
+const SPEED = { A: 3.4, D: 3.75 };
+const TURN  = { A: 520, D: 540 };
+const ACC = 16, BRAKE = 20;         /* units per second per second - still a wind-up */
+
+/* The run trade: faster, but the ball is pushed further ahead - so the ball, which
+   is what actually gets tackled, is exposed. Control also suffers. */
+const RUN_SPEED = 1.7;
+const RUN_TURN = 0.55;
+/* The ball at your feet, and a defender who has to arrive.
+
+   BALL_HOLD was 1.05 against a REACH of 0.95: the ball sat permanently outside the
+   defender's reach, so an opponent standing between you and the goal took it from
+   two units away while never touching you. Every attack forward was a lost ball,
+   whatever the stick did - measured, ten rounds of ten. The ball now sits 0.55
+   ahead, inside the reach, so what decides possession is who gets there first, not
+   geometry. */
+const BALL_HOLD = 0.55;
+const BALL_RUN = 1.5;
+
+const DIRS = [0, 45, 90, 135, 180, 225, 270, 315];
+const ROUND_SECONDS = 45;
+const BEST_OF = 3;
+
+/* Per-world speed, so a fast round is the same game played quicker rather than a
+   different balance. */
+const paceOf = g => (PACES[g.pace] || PACES.normal).m;
+
+const rad = d => d * Math.PI / 180;
+const norm = a => ((a + 180) % 360 + 360) % 360 - 180;
+const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+
+/* ---- state ---- */
+
+function makeBody(x, y, heading) {
+  return {
+    x, y, h: heading, speed: 0,
+    want: heading,       /* the heading this body has been told to take */
+    moving: false,       /* false = braking to a stop */
+    running: false,
+    chasing: false,      /* the assist: aim recomputed every frame */
+    stumble: 0,          /* seconds off balance after losing the ball */
+    trail: [],
+  };
+}
+
+function newGame(opts) {
+  const o = opts || {};
+  const p = PITCHES[o.pitch] || PITCHES.normal;
+  const squad = SQUADS[o.squad] ? Number(o.squad) : 3;
+  return {
+    pitch: p.label,
+    pace: PACES[o.pace] ? o.pace : 'normal',
+    squad,
+    w: p.w, h: p.h,
+    attacker: 1,              /* the seat IN POSSESSION, not "the attacking side" */
+    kickoff: 1,               /* who starts each round with the ball */
+    bodies: { 1: [], 2: [] },
+    sel: { 1: 0, 2: 0 },      /* which of your squad you are steering */
+    ballOwner: 0,             /* index inside the side in possession */
+    ball: null,               /* { x, y, vx, vy, state, targetIdx, life } */
+    grace: 0,                 /* seconds after a turnover during which nobody can tackle */
+    turnovers: { 1: 0, 2: 0 },
+    score: { 1: 0, 2: 0 },
+    rounds: { 1: 0, 2: 0 },
+    t: 0, over: null, winner: null,
+    tick: 0, startedAt: null,
+  };
+}
+
+/* Each seat owns one end. Seat 1 attacks the TOP and defends the bottom; seat 2
+   the other way round. So the pitch is not "attacker on the left" any more - both
+   players are attacking one goal and defending the other at the same time, which
+   is what makes a turnover a swing rather than a reset. */
+const attacksUp = seat => seat === 1;
+const goalLineOf = (g, seat) => attacksUp(seat) ? 0 : g.h;
+const ownGoalOf = (g, seat) => attacksUp(seat) ? g.h : 0;
+/* The heading that points at the goal a seat is attacking. */
+const forwardHeading = seat => attacksUp(seat) ? -90 : 90;
+
+/* Squad positions across the WIDTH, because the pitch is portrait: the squad
+   spreads left to right and attacks up or down. */
+function startingXs(n) {
+  if (n === 2) return [0.34, 0.66];
+  if (n === 5) return [0.12, 0.31, 0.5, 0.69, 0.88];
+  return [0.22, 0.5, 0.78];
+}
+
+function startRound(g) {
+  const n = g.squad || 3;
+  const xs = startingXs(n);
+  const holder = g.kickoff || 1;
+  const other = holder === 1 ? 2 : 1;
+
+  /* Everyone lines up on their own side of the HALFWAY line, and the side kicking
+     off starts with the ball near the middle of it.
+
+     This used to place each side in its own third with the ball carrier deep. That
+     looked reasonable and was structurally unfair: the pitch is symmetric, so a
+     side that starts with the ball in its own third has the whole field to cover
+     while the other side is already waiting in front of it. Every round then went
+     the same way - measured: the side that lost the first tackle had a nine-unit
+     field against the other's twenty-one, and won 24 out of 24. Starting at
+     halfway makes both sides equidistant from the goal they are attacking, which
+     is the whole point of a kickoff. */
+  for (const seat of [1, 2]) {
+    const half = attacksUp(seat) ? 0.58 : 0.42;
+    g.bodies[seat] = xs.map(f => makeBody(g.w * f, g.h * half, forwardHeading(seat)));
+  }
+  g.attacker = holder;
+  g.ballOwner = Math.floor(n / 2);
+  g.sel[holder] = g.ballOwner;
+  g.sel[other] = 0;
+  /* The side without the ball starts on whoever is nearest the ball. */
+  const bx = g.bodies[holder][g.ballOwner].x + Math.cos(rad(forwardHeading(holder))) * BALL_HOLD;
+  const by = g.bodies[holder][g.ballOwner].y + Math.sin(rad(forwardHeading(holder))) * BALL_HOLD;
+  let nearest = 0, nd = Infinity;
+  g.bodies[other].forEach((b, i) => {
+    const d = Math.hypot(b.x - bx, b.y - by);
+    if (d < nd) { nd = d; nearest = i; }
+  });
+  g.sel[other] = nearest;
+
+  g.t = 0;
+  g.over = null;
+  g.winner = null;
+  g.tick = 0;
+  g.grace = 0;
+  g.startedAt = null;          /* set on the first input, so nothing moves before it */
+  g.ball = { x: 0, y: 0, vx: 0, vy: 0, state: 'held', targetIdx: -1, life: 0 };
+  syncHeldBall(g);
+  if (typeof freshenBot === 'function') freshenBot();
+}
+
+/* ---- geometry the rules need ---- */
+
+function roleOf(g, seat) { return seat === g.attacker ? 'A' : 'D'; }
+function carrierOf(g) { return g.bodies[g.attacker][g.ballOwner]; }
+
+/* The two seats swap roles on a turnover. Nothing else about the world changes -
+   not the positions, not the clock - so the side that just lost the ball is
+   already chasing, and the side that won it is already facing its goal. */
+function turnover(g, toSeat, bodyIdx) {
+  if (g.over) return;
+  const fromSeat = g.attacker;
+  if (toSeat === fromSeat) return;
+  g.attacker = toSeat;
+  g.ballOwner = bodyIdx;
+  g.ball.state = 'held';
+  g.ball.vx = 0; g.ball.vy = 0;
+  g.turnovers[toSeat]++;
+
+  /* THE STUMBLE.
+
+     Without this the ball is stolen back the instant grace expires. Measured: the
+     winner stands 1.0 units from the loser (the ball rides 1.05 ahead of the
+     carrier and REACH is 0.95, so that is geometric, not bad luck), and the loser
+     never has to turn round - it was already running at the ball. Result: 60
+     possession changes per round, median 0.69 seconds apart, longest carry 1.2
+     seconds. A scrum in the middle of the pitch, and every action you take is
+     undone before it lands.
+
+     A player who has just been beaten is off balance: they have to plant, turn and
+     go again. Half a second of that is enough for the winner to get clear, and it
+     is what a tackle looks like. */
+  g.grace = 0.55;
+  for (const b of g.bodies[fromSeat]) b.stumble = 0.5;
+
+  /* The new holder must be facing its own goal to run, and the player whose squad
+     just won the ball should be steering the player who won it. */
+  const b = g.bodies[toSeat][bodyIdx];
+  if (b) { b.want = forwardHeading(toSeat); b.stumble = 0; }
+  g.sel[toSeat] = bodyIdx;
+  syncHeldBall(g);
+}
+
+/* While the ball is held it rides in front of the carrier, and a running carrier
+   pushes it further out - which is the whole cost of running, because the ball
+   is what gets tackled. */
+function syncHeldBall(g) {
+  if (g.ball.state !== 'held') return;
+  const c = carrierOf(g);
+  const off = c.running ? BALL_RUN : BALL_HOLD;
+  g.ball.x = c.x + Math.cos(rad(c.h)) * off;
+  g.ball.y = c.y + Math.sin(rad(c.h)) * off;
+}
+
+function ballAt(g) { return { x: g.ball.x, y: g.ball.y }; }
+
+/* Passing speed scaled with the players: a pass is still quick relative to a run,
+   but slow enough to watch and therefore to intercept. */
+/* A pass has to be clearly quicker than a run or it is just a hand-off, and it has
+   to be slow enough to watch and therefore to cut out. It scaled with the bodies:
+   when they moved 2.2 units/s a pass of 7 was three times their speed; they now
+   move 3.4, so a pass of 7 would be barely faster than running and every pass would
+   be intercepted. */
+const PASS_SPEED = 11;
+const PASS_MAX = 4.0;      /* seconds before a pass is considered to have failed */
+
+/* Is the straight line from the ball to a teammate clear of defenders? The bot
+   uses this before passing: a pass thrown while a defender is on top of the ball
+   is intercepted at the first tick, which is a wasted pass rather than a brave
+   one. */
+function laneClear(g, idx, slack) {
+  const def = g.bodies[g.attacker === 1 ? 2 : 1];
+  const t = g.bodies[g.attacker][idx];
+  const ax = g.ball.x, ay = g.ball.y;
+  const bx = t.x, by = t.y;
+  const vx = bx - ax, vy = by - ay;
+  const len2 = vx * vx + vy * vy || 1;
+  for (const d of def) {
+    /* project the defender onto the segment, clamp to it, measure the gap */
+    let u = ((d.x - ax) * vx + (d.y - ay) * vy) / len2;
+    u = u < 0 ? 0 : u > 1 ? 1 : u;
+    const px = ax + vx * u, py = ay + vy * u;
+    if (Math.hypot(d.x - px, d.y - py) < (slack || REACH * 1.6)) return false;
+  }
+  return true;
+}
+
+/* Play the ball to a named teammate. The ball leaves the carrier and travels,
+   and it is genuinely in the air: a defender close to its line catches it.
+
+   The pass is LED, not aimed at where the teammate is standing now. A teammate
+   running at seven units a second would otherwise outrun its own pass every
+   time, and the ball would sail out of play - which is what happened before the
+   lead was added. Leading also makes the interception real: the ball is thrown
+   into space, and a defender has to be reading the same space. */
+function passTo(g, idx) {
+  const atk = g.attacker;
+  if (idx === g.ballOwner) return false;
+  const target = g.bodies[atk][idx];
+
+  const passSpeed = PASS_SPEED * paceOf(g);
+
+  /* Solve for the flight time: |ball + v*t - target - vt*t| = passSpeed * t.
+     The teammate's velocity is its current heading and speed, which is the only
+     thing anyone on the field knows. */
+  const tx = Math.cos(rad(target.h)) * target.speed;
+  const ty = Math.sin(rad(target.h)) * target.speed;
+  const rx = target.x - g.ball.x, ry = target.y - g.ball.y;
+
+  const a = tx * tx + ty * ty - passSpeed * passSpeed;
+  const b = 2 * (rx * tx + ry * ty);
+  const c = rx * rx + ry * ry;
+  let flight;
+  if (Math.abs(a) < 1e-6) {
+    flight = b !== 0 ? -c / b : 0;
+  } else {
+    const disc = b * b - 4 * a * c;
+    flight = disc < 0 ? 0 : (-b - Math.sqrt(disc)) / (2 * a);
+  }
+  if (!(flight > 0)) flight = Math.sqrt(c) / passSpeed;
+
+  const aimX = target.x + tx * flight;
+  const aimY = target.y + ty * flight;
+  const dx = aimX - g.ball.x, dy = aimY - g.ball.y;
+  const d = Math.hypot(dx, dy) || 1;
+
+  g.ball.state = 'pass';
+  g.ball.targetIdx = idx;
+  g.ball.vx = (dx / d) * passSpeed;
+  g.ball.vy = (dy / d) * passSpeed;
+  g.ball.life = 0;
+  return true;
+}
+
+function stepBall(g, dt) {
+  if (g.ball.state === 'held') { syncHeldBall(g); return; }
+
+  g.ball.life += dt;
+  g.ball.x += g.ball.vx * dt;
+  g.ball.y += g.ball.vy * dt;
+
+  /* A pass that is caught on the very first tick is not an interception, it is a
+     pass thrown into a defender's chest. Give the ball a moment of travel before
+     anyone can reach it, so what gets cut out is a pass read on the way. */
+  if (g.ball.life < 0.12) return;
+
+  /* A shot is not aimed at anybody, so it has to be able to score on its own.
+     It goes through the same goal test as a carried ball, and it is still
+     physical: a defender standing in the line stops it. */
+  if (g.ball.state === 'shot') {
+    const defSeat = g.attacker === 1 ? 2 : 1;
+    for (let i = 0; i < g.bodies[defSeat].length; i++) {
+      const d = g.bodies[defSeat][i];
+      if (Math.hypot(d.x - g.ball.x, d.y - g.ball.y) < REACH) {
+        turnover(g, defSeat, i);
+        return;
+      }
+    }
+
+    /* Did it go in? Same mouth test as a carried ball, so a shot that misses the
+       posts is a shot that goes out, not a goal off the side netting. */
+    const line = goalLineOf(g, g.attacker);
+    const beyond = line === 0 ? g.ball.y <= GOAL : g.ball.y >= g.h - GOAL;
+    if (beyond && inMouth(g, g.ball.x)) {
+      g.over = 'goal';
+      g.winner = g.attacker;
+      return;
+    }
+    if (g.ball.y < -2 || g.ball.y > g.h + 2 ||
+        g.ball.x < -2 || g.ball.x > g.w + 2) {
+      g.ball.state = 'loose';
+      g.ball.vx = 0; g.ball.vy = 0;
+      g.ball.x = clamp(g.ball.x, 1.5, g.w - 1.5);
+      g.ball.y = clamp(g.ball.y, 1.5, g.h - 1.5);
+    }
+    if (g.ball.life > PASS_MAX) {
+      g.ball.state = 'loose';
+      g.ball.vx = 0; g.ball.vy = 0;
+    }
+    return;
+  }
+
+  /* A pass is intercepted if a defender is close to the BALL while it travels.
+     This is physical, not a rule about "someone in the way": the defender has to
+     have put its body near the line of the pass. An interception is a turnover,
+     not the end of the round. */
+  const defSeat = g.attacker === 1 ? 2 : 1;
+  for (let i = 0; i < g.bodies[defSeat].length; i++) {
+    const d = g.bodies[defSeat][i];
+    if (Math.hypot(d.x - g.ball.x, d.y - g.ball.y) < REACH) {
+      turnover(g, defSeat, i);
+      return;
+    }
+  }
+
+  if (g.ball.x < 0 || g.ball.x > g.w || g.ball.y < 0 || g.ball.y > g.h) {
+    g.ball.state = 'loose';
+    g.ball.vx = 0; g.ball.vy = 0;
+    return;
+  }
+
+  const target = g.bodies[g.attacker][g.ball.targetIdx];
+  /* the catch radius is generous compared to REACH: the pass was led, so it
+     lands near the runner rather than exactly on them, and a runner chasing its
+     own pass is exactly the picture we want */
+  if (target && Math.hypot(target.x - g.ball.x, target.y - g.ball.y) < 1.1) {
+    g.ballOwner = g.ball.targetIdx;
+    g.ball.state = 'held';
+    syncHeldBall(g);
+    return;
+  }
+
+  if (g.ball.life > PASS_MAX) {
+    /* overshot: the ball sits loose, and the nearest attacker can take it */
+    g.ball.state = 'loose';
+    g.ball.vx = 0; g.ball.vy = 0;
+  }
+}
+
+/* A loose ball is picked up by whoever is nearest. If that is a defender, it is a
+   turnover and play carries on - the same rule as a tackle, because a loose ball
+   is only ever a ball nobody has yet. */
+function settleLoose(g) {
+  if (g.ball.state !== 'loose') return;
+  const all = [];
+  g.bodies[1].forEach((b, i) => all.push({ b, seat: 1, i }));
+  g.bodies[2].forEach((b, i) => all.push({ b, seat: 2, i }));
+  let best = null, bd = Infinity;
+  for (const e of all) {
+    const d = Math.hypot(e.b.x - g.ball.x, e.b.y - g.ball.y);
+    if (d < bd) { bd = d; best = e; }
+  }
+  if (!best || bd >= 1.2) return;
+
+  if (best.seat === g.attacker) {
+    g.ballOwner = best.i;
+    g.ball.state = 'held';
+    syncHeldBall(g);
+  } else {
+    turnover(g, best.seat, best.i);
+  }
+}
+
+/* Where the assist points.
+
+   Defending: NOT at the ball. Aiming at where the ball is produces a tail-chase
+   that closes at the speed difference (0.25 units a second) and never arrives
+   inside the reach - measured: the defender closed to 1.85 and stayed there for
+   ten seconds. It has to aim where the ball is GOING, solving for the moment it
+   can arrive. That is what "closing down" means to a footballer too.
+
+   Attacking: at the goal it is attacking, drifting off the nearest defender when
+   one is close. */
+function chaseHeading(g, body, seat) {
+  const ball = ballAt(g);
+
+  if (roleOf(g, seat) === 'D') {
+    const carrier = carrierOf(g);
+    /* NOT multiplied down. The defender's edge over a carrier is that it can cut
+       the corner while the carrier has to go round it; shaving its speed to below
+       the carrier's removed that edge and made the chase provably unwinnable
+       (measured: 24 rounds, the side that lost the ball camped in front of its own
+       goal and conceded every time). */
+    const mySpeed = SPEED.D * paceOf(g) * (body.running ? RUN_SPEED : 1);
+    const vx = Math.cos(rad(carrier.h)) * carrier.speed;
+    const vy = Math.sin(rad(carrier.h)) * carrier.speed;
+
+    /* The earliest future position of the ball this body can actually reach.
+
+       Chasing where the ball IS only works from in front. When the carrier has
+       broken away, the ball is ahead of him and a stern chase closes at the speed
+       difference - measured: 1.85 units and holding, for ten seconds, against a
+       reach of 0.95. So search forward instead and take the first arrival, which
+       is the same thing a defender does when it cuts the angle. */
+    let best = null, bestT = Infinity;
+    for (let t = 0.15; t <= 3.6; t += 0.15) {
+      const px = Math.max(0, Math.min(g.w, g.ball.x + vx * t));
+      const py = Math.max(0, Math.min(g.h, g.ball.y + vy * t));
+      const reach = Math.hypot(px - body.x, py - body.y);
+      if (reach <= mySpeed * t) { best = { x: px, y: py }; bestT = t; break; }
+    }
+
+    /* Nothing reachable: fall back to the point on his line closest to our own
+       goal, which at least gets a body between the ball and the net. */
+    if (!best) {
+      const own = ownGoalOf(g, seat);
+      const t = Math.max(0.4, Math.min(3.6,
+                Math.abs(own - g.ball.y) / Math.max(0.4, Math.abs(vy) || 1)));
+      best = {
+        x: Math.max(0, Math.min(g.w, g.ball.x + vx * t)),
+        y: Math.max(0, Math.min(g.h, g.ball.y + vy * t))
+      };
+    }
+
+    return Math.atan2(best.y - body.y, best.x - body.x) * 180 / Math.PI;
+  }
+
+  const def = g.bodies[g.attacker === 1 ? 2 : 1];
+  const ty = goalLineOf(g, seat);
+  const tx = g.w / 2;
+  let nearest = null, nd = Infinity;
+  for (const d of def) {
+    const dist = Math.hypot(d.x - body.x, d.y - body.y);
+    if (dist < nd) { nd = dist; nearest = d; }
+  }
+  const toGoal = Math.atan2(ty - body.y, tx - body.x) * 180 / Math.PI;
+
+  if (nearest && nd < 3.4) {
+    /* Bend round the defender ONLY when he is actually in the way.
+
+       Two earlier versions of this were both wrong. Blending toward "away from the
+       defender" turned the carrier round when the defender stood between him and
+       the goal. Bending to one side unconditionally was worse in a subtler way: a
+       defender directly BEHIND has nothing to get round, but the bend still fired,
+       so the carrier ran diagonally for the rest of the round. Measured in a trace:
+       3.3 units covered in 6.5 seconds with speed 3.4 - a third of his pace, wasted
+       going sideways.
+
+       So: if he is behind you, run at the goal. If he is ahead of you, go round. */
+    const ax = Math.cos(rad(toGoal)), ay = Math.sin(rad(toGoal));
+    const hx = (nearest.x - body.x) / (nd || 1);
+    const hy = (nearest.y - body.y) / (nd || 1);
+    const ahead = ax * hx + ay * hy;      /* 1 = dead ahead, -1 = behind */
+
+    if (ahead > 0.15) {
+      const toHim = Math.atan2(nearest.y - body.y, nearest.x - body.x) * 180 / Math.PI;
+      const off = norm(toHim - toGoal);
+      const side = off >= 0 ? -1 : 1;     /* go round the other side */
+      const bend = clamp((3.4 - nd) / 3.4, 0, 1) * 60 * ahead;
+      return norm(toGoal + side * bend);
+    }
+  }
+  return toGoal;
+}
+
+/* ---- the simulation ----
+   One step of one body. Everything about momentum lives here: the heading is
+   only ever moved by a bounded amount per second, and the position follows the
+   heading, never the input. */
+
+function stepBody(g, body, dt, seat) {
+  if (body.stumble > 0) body.stumble = Math.max(0, body.stumble - dt);
+  const stumbled = body.stumble > 0;
+
+  if (body.chasing) body.want = chaseHeading(g, body, seat);
+
+  const role = roleOf(g, seat);
+  const turnRate = TURN[role] * (body.running ? RUN_TURN : 1);
+  const err = norm(body.want - body.h);
+  /* A stumbling body can barely turn: it is off balance, and that is the whole
+     point of the stumble. Its speed is cut too, so it cannot simply carry on. */
+  const maxTurn = turnRate * dt * (stumbled ? 0.15 : 1);
+  body.h = norm(body.h + clamp(err, -maxTurn, maxTurn));
+
+  /* The host's pace multiplies every speed in the world at once, so fast is the
+     same game played quicker rather than a different balance. */
+  const pace = paceOf(g);
+  const top = SPEED[role] * pace * (body.running ? RUN_SPEED : 1) * (stumbled ? 0.35 : 1);
+  const target = body.moving ? top : 0;
+  body.speed += clamp(target - body.speed, -BRAKE * dt, ACC * dt);
+  if (body.speed < 0) body.speed = 0;
+
+  const vx = Math.cos(rad(body.h)) * body.speed;
+  const vy = Math.sin(rad(body.h)) * body.speed;
+  body.x += vx * dt;
+  body.y += vy * dt;
+
+  /* walls: slide along them rather than stopping dead, which would freeze a
+     body that is only slightly clipped */
+  if (body.x < R) { body.x = R; }
+  if (body.x > g.w - R) { body.x = g.w - R; }
+  if (body.y < R) { body.y = R; }
+  if (body.y > g.h - R) { body.y = g.h - R; }
+
+  if (body.speed > 0.05) {
+    const last = body.trail[body.trail.length - 1];
+    if (!last || Math.hypot(body.x - last[0], body.y - last[1]) > 0.18) {
+      body.trail.push([body.x, body.y]);
+      if (body.trail.length > 190) body.trail.shift();
+    }
+  }
+}
+
+/* Bodies are solid to each other, both sides. A side that could stack three
+   bodies on one point would walk through any screen. */
+function separate(g) {
+  const all = [...g.bodies[1], ...g.bodies[2]];
+  for (let i = 0; i < all.length; i++) {
+    for (let j = i + 1; j < all.length; j++) {
+      const a = all[i], b = all[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      let d = Math.hypot(dx, dy);
+      if (d < 0.0001) { dx = 0.01; dy = 0; d = 0.01; }
+      if (d < BLOCK) {
+        const push = (BLOCK - d) / 2;
+        const ux = dx / d, uy = dy / d;
+        a.x -= ux * push; a.y -= uy * push;
+        b.x += ux * push; b.y += uy * push;
+      }
+    }
+  }
+}
+
+function resolve(g) {
+  if (g.grace > 0) return;
+
+  const b = ballAt(g);
+  const def = g.bodies[g.attacker === 1 ? 2 : 1];
+
+  /* A tackle is on the BALL, not the body, and it does NOT end the round: the
+     ball changes hands and play carries on from exactly where it was won. That is
+     the difference between a game with one decision in it and a game with twenty.
+
+     It is measured on the ball because that is what the game is about: the ball
+     rides AHEAD of the carrier, so a defender in front takes it while a defender
+     behind cannot touch it. That asymmetry is not a bug, it is the reason you have
+     to get goal-side and the reason you pass.
+
+     What WAS a bug is how far ahead the ball sat. At BALL_HOLD 1.05 with REACH 0.95
+     a defender standing 2.0 units in front of you took the ball without ever
+     reaching you, so attacking forward was a guaranteed loss whatever you did with
+     the stick - measured: a passing thumb lost 10 rounds of 10. Both numbers are
+     smaller now, so the ball is at your feet and he has to actually arrive. */
+  if (g.ball.state === 'held' || g.ball.state === 'loose') {
+    for (let i = 0; i < def.length; i++) {
+      if (Math.hypot(def[i].x - b.x, def[i].y - b.y) < REACH) {
+        turnover(g, g.attacker === 1 ? 2 : 1, i);
+        return;
+      }
+    }
+  }
+
+  /* Two goals: each seat attacks the end it is facing, and only the mouth counts -
+     a ball that drifts over the goal line beside the post is not a goal. */
+  const atkSeat = g.attacker;
+  const line = goalLineOf(g, atkSeat);
+  const reached = line === 0 ? b.y <= GOAL : b.y >= g.h - GOAL;
+  if (reached && inMouth(g, b.x)) {
+    g.over = 'goal';
+    g.winner = atkSeat;
+    return;
+  }
+
+  /* A ball that leaves the field anywhere else is out of play: the side that did
+     not touch it last restarts from the nearest point on the touchline. */
+  if (b.y < 0 || b.y > g.h || b.x < 0 || b.x > g.w) {
+    const to = g.attacker === 1 ? 2 : 1;
+    const nx = Math.max(1.5, Math.min(g.w - 1.5, b.x));
+    const ny = Math.max(1.5, Math.min(g.h - 1.5, b.y));
+    const nearestIdx = nearestBodyTo(g, to, nx, ny);
+    turnover(g, to, nearestIdx);
+    const nb = g.bodies[to][nearestIdx];
+    nb.x = nx; nb.y = ny;
+    g.ball.x = nx; g.ball.y = ny;
+    g.grace = 0.5;
+  }
+}
+
+function nearestBodyTo(g, seat, x, y) {
+  let best = 0, bd = Infinity;
+  g.bodies[seat].forEach((b, i) => {
+    const d = Math.hypot(b.x - x, b.y - y);
+    if (d < bd) { bd = d; best = i; }
+  });
+  return best;
+}
+
+function tick(g, dt) {
+  if (g.over) return;
+  g.t += dt;
+  g.tick++;
+  if (g.grace > 0) g.grace = Math.max(0, g.grace - dt);
+
+  /* Nothing moves until somebody acts. A round that starts in motion is one you
+     are already losing before you have looked at it. */
+  if (!g.startedAt) {
+    const acted = g.bodies[1].concat(g.bodies[2]).some(b => b.moving || b.chasing);
+    if (!acted) return;
+    g.startedAt = g.t;
+  }
+
+  /* Off-ball movement for BOTH sides, so the pitch is neither empty nor unfair. */
+  for (const seat of [1, 2]) {
+    const arr = g.bodies[seat];
+    for (let i = 0; i < arr.length; i++) offBall(g, seat, arr[i], i);
+  }
+
+  for (const seat of [1, 2]) {
+    for (const body of g.bodies[seat]) stepBody(g, body, dt, seat);
+  }
+  separate(g);
+  stepBall(g, dt);
+  if (!g.over) settleLoose(g);
+  if (!g.over) resolve(g);
+
+  if (!g.over && g.t >= ROUND_SECONDS) {
+    g.over = 'time';
+    g.winner = null;
+  }
+}
+
+function nextRound(g) {
+  if (g.winner) {
+    g.score[g.winner]++;
+    g.rounds[g.winner]++;
+  }
+  /* The side that conceded kicks off, which is the small courtesy every game
+     gives and the only thing a round boundary now decides. */
+  g.kickoff = g.winner ? (g.winner === 1 ? 2 : 1) : g.kickoff;
+  startRound(g);
+}
+
+function matchWon(g) {
+  return g.rounds[1] > (BEST_OF >> 1) || g.rounds[2] > (BEST_OF >> 1);
+}
+
+/* ---- the bot ----
+
+   It presses the same controls a thumb does. With turnovers, the bot has two jobs
+   in the same round, so it does exactly what the player must: with the ball, run
+   at the goal; without it, chase the ball. It drives ONLY the player it has
+   selected.
+
+   It also varies per round. Both sides here are deterministic from a fixed
+   start, so one fixed setting produces the same round every time - measured: 24
+   rounds, all identical to the tenth of a second. A bot that never varies is not
+   an opponent, it is a puzzle with one answer. So its reaction time and how hard
+   it presses are drawn fresh each round. */
+const BOT = { think: 0, every: 0.16, press: 1.0 };
+
+function freshenBot() {
+  /* How fast the bot re-decides, drawn fresh each round.
+
+     This number IS the difficulty and it is a cliff, not a dial: measured over 16
+     rounds against the same plain thumb,
+       0.16-0.32 -> the player won 0
+       0.26-0.42 -> 3
+       0.34-0.52 -> 5
+       0.42-0.62 -> 8   (even)
+       0.44-0.66 -> 11
+     Deterministic play from a fixed start has no middle, so the range is centred on
+     the even point and the variation is what stops one line working forever.
+     A slower thumb than the harness will need a slower bot, so this errs generous:
+     losing 6 in 16 still feels like a fight; losing 16 in 16 does not. */
+  BOT.every = 0.40 + Math.random() * 0.24;
+  BOT.press = 0.55 + Math.random() * 0.45;
+  BOT.think = 0;
+}
+
+/* THE BOT PLAYS WITH A THUMB, NOT A SOLVER.
+
+   This is why the game was unplayable rather than merely hard. The player pushes
+   one of eight directions and holds it; the bot called chaseHeading(), which
+   solves for the exact point where it can intercept the ball, every single think.
+   Measured: a scripted thumb reacting every 220ms lost 0 of 10 rounds, while the
+   same seat driven by the solver won 10 of 12. The gap was not difficulty, it was
+   that one side had perfect information and the other had a stick.
+
+   So the bot now does what a thumb does: picks a direction, snaps it to one of the
+   eight, and holds it until its next beat. It is still a good opponent - it picks
+   the right eight-way direction, it runs when it is in the open, it passes when
+   the lane is clear - but it can no longer thread a curve that a person cannot
+   draw. */
+const BOT_DIRS = [0, 45, 90, 135, 180, 225, 270, 315];
+
+function snapDir(deg) {
+  let best = BOT_DIRS[0], bd = Infinity;
+  for (const d of BOT_DIRS) {
+    const e = Math.abs(norm(deg - d));
+    if (e < bd) { bd = e; best = d; }
+  }
+  return best;
+}
+
+/* ---- off the ball ----
+
+   The player steers ONE body. Everyone else used to stand still, and that made
+   the game a duel with four statues on it: measured, 4 of 6 bodies never moved in
+   a whole round. Passing was therefore pointless (the targets were rocks), the
+   picture had nothing in it, and every round came down to one runner against one
+   defender - the hardest possible shape and the emptiest.
+
+   Real football has movement off the ball, so these bodies do the simplest version
+   of it: spread out, drift into space ahead, and stay available. They are NOT
+   steered by the player and they do not chase the ball, so the player still owns
+   exactly one body - which is the control scheme - but the pitch is alive and a
+   pass goes to someone who is moving.
+
+   Both sides run this same function, so neither gets free intelligence. */
+function offBall(g, seat, body, i) {
+  if (i === g.sel[seat]) return;          /* the selected body is the player's */
+  if (g.attacker === seat && i === g.ballOwner) return;   /* the carrier is driven */
+
+  const pace = paceOf(g);
+  const own = ownGoalOf(g, seat);
+  const goalY = goalLineOf(g, seat);
+  const weHave = g.attacker === seat;
+
+  /* Where this body belongs: spread across the width, and level with the ball
+     while we are defending, ahead of it while we are attacking. */
+  const n = g.bodies[seat].length;
+  const lane = n <= 1 ? 0.5 : i / Math.max(1, n - 1);
+  const tx = g.w * (0.22 + lane * 0.56);
+  const ty = weHave
+    ? clamp(g.ball.y + (attacksUp(seat) ? -4.5 : 4.5), 2, g.h - 2)
+    : clamp(g.ball.y + (attacksUp(seat) ? 2.0 : -2.0), 2, g.h - 2);
+
+  const dx = tx - body.x, dy = ty - body.y;
+  const d = Math.hypot(dx, dy);
+
+  /* Close enough: hold position rather than jitter around the spot. */
+  if (d < 1.2) {
+    body.moving = false;
+    body.chasing = false;
+    return;
+  }
+  body.chasing = false;
+  body.moving = true;
+  body.want = snapDir(Math.atan2(dy, dx) * 180 / Math.PI);
+  body.running = d > 5;
+}
+
+function botDrive(g) {
+  BOT.think += 1 / 60;
+  if (BOT.think < BOT.every) return;
+  BOT.think = 0;
+
+  const seat = 2;
+  const mine = g.bodies[seat];
+  const ball = ballAt(g);
+  const weHaveIt = g.attacker === seat;
+  const nearDef = b => {
+    let m = Infinity;
+    for (const d of g.bodies[seat === 1 ? 2 : 1]) {
+      m = Math.min(m, Math.hypot(d.x - b.x, d.y - b.y));
+    }
+    return m;
+  };
+
+  if (weHaveIt) {
+    g.sel[seat] = g.ballOwner;
+    const carrier = mine[g.ballOwner];
+    carrier.chasing = false;
+    carrier.moving = true;
+    carrier.running = nearDef(carrier) > 4.0;
+
+    /* Aim at the goal, stepping round a defender only when it is in front. */
+    const goalY = goalLineOf(g, seat);
+    let desired = Math.atan2(goalY - carrier.y, g.w / 2 - carrier.x) * 180 / Math.PI;
+    let near = null, nd = Infinity;
+    for (const f of g.bodies[seat === 1 ? 2 : 1]) {
+      const dd = Math.hypot(f.x - carrier.x, f.y - carrier.y);
+      if (dd < nd) { nd = dd; near = f; }
+    }
+    if (near && nd < 3.2) {
+      const ax = Math.cos(rad(desired)), ay = Math.sin(rad(desired));
+      const hx = (near.x - carrier.x) / (nd || 1);
+      const hy = (near.y - carrier.y) / (nd || 1);
+      if (ax * hx + ay * hy > 0.15) {
+        const toHim = Math.atan2(near.y - carrier.y, near.x - carrier.x) * 180 / Math.PI;
+        const side = norm(toHim - desired) >= 0 ? -1 : 1;
+        desired = norm(desired + side * 55);
+      }
+    }
+    carrier.want = snapDir(desired);
+
+    if (g.ball.state === 'held' && g.tick % 100 === 0) {
+      let bestIdx = -1, bestGain = -Infinity;
+      mine.forEach((b, i) => {
+        if (i === g.ballOwner) return;
+        const towardGoal = attacksUp(seat) ? (g.h - b.y) : b.y;
+        const gain = towardGoal * 0.9 + Math.min(nearDef(b), 6) * 0.7;
+        if (gain > bestGain && laneClear(g, i, REACH * 1.7)) {
+          bestGain = gain; bestIdx = i;
+        }
+      });
+      const crowded = nearDef(carrier) < 2.4;
+      if (bestIdx >= 0 && crowded) passTo(g, bestIdx);
+    }
+    return;
+  }
+
+  /* Without the ball: take the player nearest the ball and go and win it.
+
+     It aims GOAL-SIDE of the ball, not at the ball. Chasing the ball directly means
+     following the carrier round the pitch and arriving behind him, where the tackle
+     can never land - a defender who is always behind is not defending, he is
+     escorting. Standing between the ball and his own net means every run at goal
+     has to come through him, and the carrier has to go round, which costs the time
+     that lets a defender recover. */
+  let best = 0, bd = Infinity;
+  mine.forEach((b, i) => {
+    const d = Math.hypot(b.x - ball.x, b.y - ball.y);
+    if (d < bd) { bd = d; best = i; }
+  });
+  if (best !== g.sel[seat]) {
+    const cur = mine[g.sel[seat]];
+    const curD = Math.hypot(cur.x - ball.x, cur.y - ball.y);
+    if (curD - bd > 1.4) g.sel[seat] = best;
+  }
+  const s = mine[g.sel[seat]];
+
+  /* The point to stand on: between the ball and the goal it is defending, two
+     units on the goal side. When it is already the closest body it goes straight
+     at the ball instead, because standing off is only useful from a distance. */
+  const ownY = ownGoalOf(g, seat);
+  const dx = g.w / 2 - ball.x;
+  const dy = ownY - ball.y;
+  const dl = Math.hypot(dx, dy) || 1;
+  const guardDist = bd < 2.2 ? 0 : 2.0;
+  const gx = ball.x + (dx / dl) * guardDist;
+  const gy = ball.y + (dy / dl) * guardDist;
+
+  s.chasing = false;
+  s.moving = true;
+  s.want = snapDir(Math.atan2(gy - s.y, gx - s.x) * 180 / Math.PI);
+  s.running = bd > 3.0;
+}
+
+/* ---- drawing ---- */
+
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+let fitDpr = 1, cssW = 0, cssH = 0;
+
+function fit() {
+  const wrap = document.querySelector('.wrap');
+  const box = cvs.parentElement;
+  const g = GAME;
+  const aspect = g.w / g.h;
+
+  /* ONE owner for the height, as before: this function measures and decides, and
+     nothing in CSS claims the same space.
+
+     There are no pads to reserve room for now, so the field simply takes the
+     largest size that leaves a thumb somewhere to rest. On a tall phone that is
+     the full width; on a short one the field gives up a little height so a drag
+     never has to start on the play. */
+  const cs = getComputedStyle(wrap);
+  const pl = parseFloat(cs.paddingLeft) || 0;
+  const pr = parseFloat(cs.paddingRight) || 0;
+  const pt = parseFloat(cs.paddingTop) || 0;
+  const pb = parseFloat(cs.paddingBottom) || 0;
+  const rowGap = parseFloat(cs.rowGap) || 0;
+  const gaps = rowGap * 3;
+
+  const topRow = document.querySelector('.top');
+  const capRow = document.querySelector('.cap');
+  const fixed = (topRow ? topRow.offsetHeight : 0) +
+                (capRow ? capRow.offsetHeight : 0) +
+                pt + pb + gaps;
+
+  const availW = Math.max(80, Math.min(wrap.clientWidth - pl - pr, 760));
+  const total = wrap.clientHeight - fixed;
+
+  /* The pads absorb the spare height rather than leaving it as empty screen: on a
+     tall phone that means bigger thumb targets, which is the right place for it.
+     Capped in proportion to the screen so a short phone keeps the field. */
+  /* No controls to reserve space for: the thumb space is whatever the field does
+     not use, and the field takes everything it can. The hint sits in that space. */
+  const cssW0 = Math.min(availW, 760);
+  let fieldW = cssW0;
+  let fieldH = fieldW / aspect;
+
+  /* On a short screen the field must still leave enough room for a thumb to rest
+     and drag without covering the play, so the field gives up a little height. */
+  const thumbRoom = Math.max(84, Math.min(190, total * 0.3));
+  if (fieldH + thumbRoom > total) {
+    fieldH = Math.max(140, total - thumbRoom);
+    fieldW = Math.min(availW, fieldH * aspect);
+    fieldH = fieldW / aspect;
+  }
+
+  const ctrlH = 0;
+  const leftover = Math.max(0, total - fieldH);
+  const topBand = 0;
+  const bottomBand = leftover;
+
+  cssW = fieldW;
+  cssH = fieldH;
+
+  /* No margins on the field: the hint row below takes the leftover height with
+     flex, and two owners of the same space made the page scroll by 6px. */
+  if (box) box.style.marginBottom = '0px';
+
+  box.style.marginTop = Math.floor(topBand) + 'px';
+  box.style.height = Math.ceil(cssH + 2) + 'px';
+  cvs.style.width = Math.floor(cssW) + 'px';
+  cvs.style.height = Math.floor(cssH) + 'px';
+
+  /* Pixel budget, not devicePixelRatio: a retina desktop at dpr 3 asks for far
+     more pixels than anyone can see, and the frame cost is what suffers. */
+  const budget = 2.4e6;
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  while (cssW * dpr * cssH * dpr > budget && dpr > 0.75) dpr -= 0.25;
+  fitDpr = dpr;
+  cvs.width = Math.round(cssW * dpr);
+  cvs.height = Math.round(cssH * dpr);
+}
+
+function draw(g) {
+  const sx = cvs.width / g.w, sy = cvs.height / g.h;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cvs.width, cvs.height);
+
+  /* field */
+  ctx.fillStyle = '#0a0f15';
+  ctx.fillRect(0, 0, cvs.width, cvs.height);
+
+  ctx.strokeStyle = '#16202b';
+  ctx.lineWidth = Math.max(1, fitDpr);
+  const step = 2.5;
+  for (let x = step; x < g.w; x += step) {
+    ctx.beginPath(); ctx.moveTo(x * sx, 0); ctx.lineTo(x * sx, cvs.height); ctx.stroke();
+  }
+  for (let y = step; y < g.h; y += step) {
+    ctx.beginPath(); ctx.moveTo(0, y * sy); ctx.lineTo(cvs.width, y * sy); ctx.stroke();
+  }
+
+  /* halfway line across, and the centre circle */
+  ctx.strokeStyle = '#1e2c3a';
+  ctx.lineWidth = Math.max(1.5, fitDpr * 1.5);
+  ctx.beginPath();
+  ctx.moveTo(0, g.h / 2 * sy); ctx.lineTo(cvs.width, g.h / 2 * sy);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(g.w / 2 * sx, g.h / 2 * sy, Math.min(cvs.width, cvs.height) * 0.14, 0, Math.PI * 2);
+  ctx.stroke();
+
+  /* Both goals: the one at the top is what seat 1 attacks, the bottom is seat 2's.
+     Each is tinted with the colour of the side that scores there, so which end is
+     yours is never a guess. */
+  const goalH = Math.max(18, GOAL / g.h * cvs.height);
+  const mouthW = cvs.width * 0.34;
+  const mouthX = (cvs.width - mouthW) / 2;
+
+  ctx.fillStyle = 'rgba(224,176,85,.16)';
+  ctx.fillRect(mouthX, 0, mouthW, goalH);
+  ctx.strokeStyle = 'rgba(224,176,85,.75)';
+  ctx.lineWidth = Math.max(2, fitDpr * 2);
+  ctx.beginPath(); ctx.moveTo(mouthX, goalH); ctx.lineTo(mouthX + mouthW, goalH); ctx.stroke();
+
+  ctx.fillStyle = 'rgba(127,176,232,.16)';
+  ctx.fillRect(mouthX, cvs.height - goalH, mouthW, goalH);
+  ctx.strokeStyle = 'rgba(127,176,232,.75)';
+  ctx.strokeStyle = 'rgba(127,176,232,.75)';
+  ctx.beginPath(); ctx.moveTo(mouthX, cvs.height - goalH);
+  ctx.lineTo(mouthX + mouthW, cvs.height - goalH); ctx.stroke();
+
+  /* trails first, so bodies sit on top */
+  for (const seat of [1, 2]) {
+    ctx.strokeStyle = seat === 1 ? 'rgba(224,176,85,.5)' : 'rgba(127,176,232,.5)';
+    ctx.lineWidth = Math.max(1.2, fitDpr * 1.2);
+    for (const b of g.bodies[seat]) {
+      if (b.trail.length < 2) continue;
+      ctx.beginPath();
+      ctx.moveTo(b.trail[0][0] * sx, b.trail[0][1] * sy);
+      for (let i = 1; i < b.trail.length; i++) {
+        ctx.lineTo(b.trail[i][0] * sx, b.trail[i][1] * sy);
+      }
+      ctx.stroke();
+    }
+  }
+
+  const carrier = carrierOf(g);
+  const mySide = mySeat();
+
+  for (const seat of [1, 2]) {
+    for (let i = 0; i < g.bodies[seat].length; i++) {
+      const b = g.bodies[seat][i];
+      const isSel = g.sel[seat] === i;
+      const isMine = seat === mySide;
+      const col = seat === 1 ? '#e0b055' : '#7fb0e8';
+      const px = b.x * sx, py = b.y * sy;
+      const r = Math.max(9, R * Math.min(sx, sy) * 1.55);
+
+      /* Your own players get a solid outline, theirs a hollow ring: at a glance
+         you can tell which three you control, which was not readable before. */
+      ctx.beginPath();
+      ctx.arc(px, py, r + 3, 0, Math.PI * 2);
+      ctx.fillStyle = isMine ? 'rgba(0,0,0,.28)' : 'transparent';
+      if (isMine) ctx.fill();
+
+      if (isSel) {
+        ctx.beginPath();
+        ctx.arc(px, py, r + Math.max(6, 7 * fitDpr), 0, Math.PI * 2);
+        ctx.strokeStyle = isMine ? 'rgba(255,255,255,.9)' : 'rgba(255,255,255,.3)';
+        ctx.lineWidth = Math.max(2, fitDpr * 2);
+        ctx.stroke();
+      }
+
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fillStyle = isMine ? col : 'rgba(20,28,38,.9)';
+      ctx.fill();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(2, fitDpr * 2.2);
+      ctx.stroke();
+
+      /* heading tick: the thing that shows momentum even when the body is still */
+      ctx.beginPath();
+      ctx.moveTo(px + Math.cos(rad(b.h)) * r * 0.4, py + Math.sin(rad(b.h)) * r * 0.4);
+      ctx.lineTo(px + Math.cos(rad(b.h)) * r * 2.3, py + Math.sin(rad(b.h)) * r * 2.3);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(2, r * 0.42);
+      ctx.stroke();
+    }
+  }
+
+  /* the ball - the only thing that scores, and the only thing that changes hands.
+     It must read as SMALLER than a body but not as a speck: at 0.62 of a body it
+     came out a dim grey dot on a phone. */
+  const ball = ballAt(g);
+  const bodyR = Math.max(9, R * Math.min(sx, sy) * 1.55);
+  const br = bodyR * 0.78;
+  ctx.beginPath();
+  ctx.arc(ball.x * sx, ball.y * sy, br + bodyR * 0.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,255,255,.30)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(ball.x * sx, ball.y * sy, br, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(8,10,14,.95)';
+  ctx.lineWidth = Math.max(2, fitDpr * 2);
+  ctx.stroke();
+
+  /* the thread from carrier to ball, so a running carrier reads as loose */
+  ctx.beginPath();
+  ctx.moveTo(carrier.x * sx, carrier.y * sy);
+  ctx.lineTo(ball.x * sx, ball.y * sy);
+  ctx.strokeStyle = 'rgba(255,248,230,.28)';
+  ctx.lineWidth = Math.max(1, fitDpr);
+  ctx.stroke();
+}
+
+/* ---- the player's controls: gestures, not widgets ----
+
+   The screen IS the controller. There is nothing to find with a thumb - no stick
+   to locate, no button whose label has to be read while the ball is moving.
+
+     drag anywhere    the heading runs from where the thumb landed to where it is
+                      now. Push further to sprint: effort is distance.
+     tap              pass along the heading you were last holding.
+     double tap       shoot along the same heading.
+
+   Two things make this work where three widgets did not.
+
+   First, the ANCHOR IS WHERE THE THUMB LANDED, not a fixed circle. The pads used
+   to occupy a fixed corner of the screen, so the thumb had to find them; here the
+   point of contact becomes the origin, which is how every thumbstick on a phone
+   actually behaves.
+
+   Second, release keeps the heading. The run never stops, exactly as before, so a
+   drag is a steering decision rather than a hold-to-move. That is what makes a TAP
+   meaningful: after you let go the body is still going somewhere, so "pass the way
+   I was going" is a sentence that means something. */
+
+const gest = document.getElementById('gest');
+const gAnchor = document.getElementById('ganchor');
+const gKnob = document.getElementById('gknob');
+const gLine = document.getElementById('gline');
+
+/* Every control writes to the world the player can see: the host's world for the
+   host, the replica for the guest. A guest's write also travels on the wire,
+   because the host owns the game - writing only the replica would look right
+   locally and never reach the other phone. */
+const GAME = newGame({ pitch: 'normal', pace: 'normal', squad: '3' });
+
+function localWorld() { return mode === 'guest' && replica ? replica : GAME; }
+
+/* Which body does the thumb write to? The selected one. Everyone else is
+   simulated by offBall(), so selection is a real choice about which player YOU
+   are, not a way to puppeteer the team. */
+function mine() {
+  const g = localWorld();
+  const s = mySeat();
+  return g.bodies[s][g.sel[s]];
+}
+
+function tellHost() {
+  if (mode !== 'guest' || !replica) return;
+  const s = mySeat();
+  const i = replica.sel[s];
+  const b = replica.bodies[s][i];
+  if (!b) return;
+  guestSay({ t: 'body', i, want: b.want, moving: b.moving,
+             chasing: b.chasing, running: b.running });
+}
+
+/* The heading the player is holding, in degrees, and whether they are pushing far
+   enough to sprint. Kept outside the pointer handlers because a tap has to act on
+   a heading that was chosen earlier. */
+let heldDir = forwardHeading(1);
+let heldSprint = false;
+
+/* How far the thumb must travel before it counts as a sprint, in CSS pixels.
+   Tied to the screen rather than a constant so it feels the same on a small phone:
+   about a third of the way across. */
+const sprintAt = () => Math.max(64, Math.min(window.innerWidth, 520) * 0.22);
+
+const DIRS8 = [0, 45, 90, 135, 180, 225, 270, 315];
+function snap8(deg) {
+  let best = DIRS8[0], bd = Infinity;
+  for (const d of DIRS8) {
+    const e = Math.abs(norm(deg - d));
+    if (e < bd) { bd = e; best = d; }
+  }
+  return best;
+}
+
+let press = null;       /* { id, x0, y0, t0, moved } for the active pointer */
+
+function showGest(x0, y0, x, y, sprint) {
+  gest.classList.add('on');
+  gAnchor.style.left = x0 + 'px';
+  gAnchor.style.top = y0 + 'px';
+  const dx = x - x0, dy = y - y0;
+  const len = Math.hypot(dx, dy);
+  gLine.style.left = x0 + 'px';
+  gLine.style.top = y0 + 'px';
+  gLine.style.width = len + 'px';
+  gLine.style.transform = 'rotate(' + Math.atan2(dy, dx) + 'rad)';
+  gKnob.style.left = x + 'px';
+  gKnob.style.top = y + 'px';
+  gKnob.classList.toggle('sprint', sprint);
+}
+
+function hideGest() {
+  gest.classList.remove('on');
+}
+
+/* Point the selected body at a heading, and say whether it is sprinting. */
+function steer(deg, sprint) {
+  heldDir = snap8(deg);
+  heldSprint = !!sprint;
+  const b = mine();
+  b.want = heldDir;
+  b.moving = true;
+  b.chasing = false;
+  b.running = heldSprint;
+  tellHost();
+}
+
+/* A pass along a heading. The teammate chosen is the one most nearly straight
+   ahead of the ball in that direction - which is what "pass that way" means - with
+   a clear lane preferred over a slightly better angle.
+
+   THERE IS NO HARD CUT-OFF. An earlier version skipped any teammate more than 70
+   degrees off the heading, on the reasoning that you should never pass behind
+   yourself. With three bodies spread across the width, that left no legal target
+   from the middle of the pitch, so the tap fell through to a second filter, found
+   nothing there either, and the button was silently a no-op - the exact fault the
+   old one-button design was rewritten to avoid, reintroduced by a rule.
+
+   So: rank by angle, prefer a clear lane, never refuse. A tap with the ball always
+   plays the ball, even if the best option is a square ball you did not quite mean.
+   An action that sometimes does nothing teaches the player not to trust it. */
+function passAlong(g, s, dir) {
+  if (!(g.attacker === s) || g.ball.state !== 'held') return false;
+  const squad = g.bodies[s].length;
+  let best = -1, bestScore = -Infinity;
+  for (let i = 0; i < squad; i++) {
+    if (i === g.ballOwner) continue;
+    const t = g.bodies[s][i];
+    const toT = Math.atan2(t.y - g.ball.y, t.x - g.ball.x) * 180 / Math.PI;
+    const off = Math.abs(norm(toT - dir));       /* 0 = dead ahead, 180 = behind */
+    const lane = laneClear(g, i, REACH * 1.4) ? 120 : 0;
+    const score = lane + (180 - off);
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  if (best < 0 || best === g.ballOwner) return false;
+  passTo(g, best);
+  if (mode === 'guest') guestSay({ t: 'pass', i: best });
+  return true;
+}
+
+/* A shot. Faster than a pass, has no recipient, and it is the only ball that can
+   be struck straight at the goal from distance. A defender still has to be in its
+   path - the ball is physical, so a shot into a body is a shot into a body. */
+const SHOT_SPEED = 20;
+function shootAlong(g, s, dir) {
+  if (!(g.attacker === s) || g.ball.state !== 'held') return false;
+  const sp = SHOT_SPEED * paceOf(g);
+  g.ball.state = 'shot';
+  g.ball.targetIdx = -1;
+  g.ball.vx = Math.cos(rad(dir)) * sp;
+  g.ball.vy = Math.sin(rad(dir)) * sp;
+  g.ball.life = 0;
+  const c = g.bodies[s][g.ballOwner];
+  if (c) { c.want = dir; }
+  if (mode === 'guest') guestSay({ t: 'shot', dir });
+  return true;
+}
+
+/* ---- the gesture layer ----
+
+   One pointer at a time. A second finger is how you would add a modifier later,
+   but guessing at two-finger inputs today would only add something that fires by
+   accident while you are steering. */
+function playLive() {
+  if (mode !== 'solo' && mode !== 'host' && mode !== 'guest') return false;
+  for (const id of ['door', 'howto', 'lobby', 'over']) {
+    const el = document.getElementById(id);
+    if (el && !el.classList.contains('hidden')) return false;
+  }
+  return true;
+}
+
+function onDown(e) {
+  /* The NEWEST press always wins. A press that never ended must not lock the
+     controls forever: a thumb that leaves the window, or anything that swallows
+     the pointerup, would otherwise leave the game ignoring every later touch -
+     which looks exactly like "the controls are broken".
+
+     Two fingers are not a supported input, so there is no gesture to protect by
+     refusing the second one. Whatever the last finger did is what you meant. */
+  press = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: 0 };
+  if (!playLive()) { press = null; return; }
+  showGest(e.clientX, e.clientY, e.clientX, e.clientY, false);
+  if (e.target && e.target.setPointerCapture) {
+    try { e.target.setPointerCapture(e.pointerId); } catch (err) {}
+  }
+  hideHint();
+}
+
+function onMove(e) {
+  if (!press || e.pointerId !== press.id) return;
+  const dx = e.clientX - press.x0, dy = e.clientY - press.y0;
+  const d = Math.hypot(dx, dy);
+  press.moved = Math.max(press.moved, d);
+  const sprint = d >= sprintAt();
+  if (d > 8) {
+    /* A drag cancels a waiting single tap: you did not mean to pass, you meant to
+       steer, and a ball leaving your feet because you dragged would be a bug. */
+    cancelPendingTap();
+    steer(Math.atan2(dy, dx) * 180 / Math.PI, sprint);
+  }
+  showGest(press.x0, press.y0, e.clientX, e.clientY, sprint);
+}
+
+function onUp(e) {
+  if (!press || e.pointerId !== press.id) return;
+  const p = press;
+  press = null;
+  hideGest();
+
+  const quick = performance.now() - p.t0 < 260;
+  const still = p.moved < 14;
+  if (!(quick && still)) return;      /* a drag is a steer, not a tap */
+
+  const g = localWorld();
+  const s = mySeat();
+
+  if (!(g.attacker === s) || g.ball.state !== 'held') {
+    /* Not our ball: a tap is the switch. Nobody wants to tap an empty screen when
+       the ball is loose and nothing happens. */
+    cancelPendingTap();
+    switchPlayer(g, s);
+    return;
+  }
+
+  /* A DOUBLE TAP BEGINS WITH A SINGLE TAP.
+
+     The first version acted on the first tap immediately, so "double tap to shoot"
+     actually passed the ball and then, finding no ball in hand, switched player.
+     The shot never happened - measured: zero shots in fourteen rounds - and the
+     gesture that was supposed to be the finisher did nothing at all.
+
+     So the single tap is HELD BRIEFLY. If a second tap lands inside the window the
+     pair becomes a shot; if it does not, the held tap becomes the pass. The cost is
+     TAP_DELAY of latency on passing, which is the price of having two meanings for
+     one finger and is much cheaper than a shot that cannot exist. */
+  const now = performance.now();
+  if (pendingTap && now - pendingTap.at < TAP_WINDOW) {
+    cancelPendingTap();
+    shootAlong(g, s, heldDir);
+    return;
+  }
+  cancelPendingTap();
+  pendingTap = {
+    at: now,
+    fire: setTimeout(() => {
+      pendingTap = null;
+      const w = localWorld();
+      if (w.attacker === mySeat() && w.ball.state === 'held') {
+        passAlong(w, mySeat(), heldDir);
+      }
+    }, TAP_DELAY),
+  };
+}
+
+/* The two numbers that make one finger mean two things. TAP_DELAY is how long a
+   single tap waits to find out it is single; TAP_WINDOW is how close a second tap
+   has to be to turn the pair into a shot. Roughly a fifth of a second: short
+   enough to feel immediate, long enough for a deliberate double tap. */
+const TAP_DELAY = 190;
+const TAP_WINDOW = 340;
+let pendingTap = null;
+function cancelPendingTap() {
+  if (pendingTap) { clearTimeout(pendingTap.fire); pendingTap = null; }
+}
+
+addEventListener('pointerdown', onDown, { passive: true });
+addEventListener('pointermove', onMove, { passive: true });
+addEventListener('pointerup', onUp, { passive: true });
+addEventListener('pointercancel', e => {
+  if (press && e.pointerId === press.id) { press = null; hideGest(); }
+});
+
+/* The instruction retires on the first drag: after that the screen is the
+   instruction. */
+let hintGone = false;
+function hideHint() {
+  if (hintGone) return;
+  hintGone = true;
+  const h = document.getElementById('hint');
+  if (h) { h.classList.add('gone'); setTimeout(() => { h.style.display = 'none'; }, 600); }
+}
+
+/* With the ball, the button must never be a no-op. If you are steering the
+   carrier and press Pass, it plays the best available ball forward rather than
+   doing nothing - pressing a button that does nothing is what made this
+   unplayable. */
+function bestPassTarget(g, s) {
+  const squad = g.bodies[s].length;
+  const ahead = attacksUp(s) ? -1 : 1;
+  let best = -1, bestScore = -Infinity;
+  for (let i = 0; i < squad; i++) {
+    if (i === g.ballOwner) continue;
+    const b = g.bodies[s][i];
+    const progress = (b.y - g.bodies[s][g.ballOwner].y) * ahead;
+    if (!laneClear(g, i, REACH * 1.5)) continue;
+    const score = progress;
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  return best;
+}
+
+/* Without the ball, pick the player nearest the ball - the one you mean nine times
+   in ten - and take it. */
+function switchPlayer(g, s) {
+  const ball = ballAt(g);
+  let nearest = g.sel[s], nd = Infinity;
+  g.bodies[s].forEach((b, i) => {
+    const d = Math.hypot(b.x - ball.x, b.y - ball.y);
+    if (d < nd) { nd = d; nearest = i; }
+  });
+  if (nearest !== g.sel[s]) {
+    g.sel[s] = nearest;
+    if (mode === 'guest') guestSay({ t: 'sel', i: g.sel[s] });
+  }
+}
+
+/* ---- auto-selection ----
+
+   The player catches the ball, so the player should BE the one holding it. Before
+   this, catching a pass left the selection where it was, and the thing you were
+   steering was a different body from the one with the ball - the single most
+   confusing thing that can happen in a game about a ball.
+
+   It runs on every tick, for the local seat only, and it only ever moves the
+   selection TO the carrier. It never takes the selection away from the player's
+   own choice while they are defending, which is what would make switching
+   pointless. */
+function autoSelect(g) {
+  const s = mySeat();
+  if (g.over) return;
+  if (g.attacker === s && g.ball.state === 'held' && g.sel[s] !== g.ballOwner) {
+    g.sel[s] = g.ballOwner;
+    if (mode === 'guest') guestSay({ t: 'sel', i: g.sel[s] });
+  }
+}
+
+/* keyboard, so the same page is testable without a touchscreen */
+const KEYS = {
+  ArrowRight: 0, ArrowDown: 45, ArrowLeft: 180, ArrowUp: 270,
+  d: 0, s: 45, a: 180, w: 270,
+  e: 315, q: 135, z: 225, c: 45,
+};
+addEventListener('keydown', ev => {
+  if (ev.repeat) return;
+  const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
+  const g = localWorld();
+  const s = mySeat();
+  if (k in KEYS) {
+    steer(KEYS[k], heldSprint);
+    ev.preventDefault();
+  } else if (k === 'x' || k === ' ') {
+    const b = mine(); b.moving = false; b.chasing = false;
+    tellHost();
+    ev.preventDefault();
+  } else if (k === 'v') {
+    switchPlayer(g, s);
+    ev.preventDefault();
+  } else if (k === 'f') {
+    const b = mine(); b.chasing = true; b.moving = true;
+    tellHost();
+    ev.preventDefault();
+  } else if (k === 'Shift') {
+    steer(heldDir, true);
+  } else if (k === 'p') {
+    passAlong(g, s, heldDir);
+  } else if (k === 'o') {
+    shootAlong(g, s, heldDir);
+  }
+});
+addEventListener('keyup', ev => {
+  if (ev.key === 'Shift') steer(heldDir, false);
+});
+
+/* ---- the loop ---- */
+
+/* ---- networking ----
+
+   Host-authoritative, over MQTT. Neither phone needs a reachable address, which
+   is the only thing that works between a phone on mobile data and one on home
+   wifi: a direct browser-to-browser link needs NAT traversal and fails silently
+   when it cannot get it.
+
+   The host owns the game and publishes a snapshot twelve times a second. The
+   guest does not draw those positions - it runs the same simulation from the same
+   inputs and corrects the difference gently. Interpolating positions stutters,
+   because the frame rate is the phone's and the message rate is not. */
+const ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+const TOPIC = 'squad/v' + BUILD + '/';
+const SEND_HZ = 12;
+
+let mode = 'door';          /* 'door' | 'solo' | 'host' | 'guest' */
+let seat = 1;
+let mq = null, hostCode = '', joined = false;
+let knockTimer = 0, sendTimer = 0, retryTimer = 0;
+let view = null;            /* the last snapshot the guest was given */
+let replica = null;         /* the guest's own running copy */
+let corr = [];              /* per-body position corrections, spent gradually */
+
+/* The host's three choices. They live on the door so the host can set them before
+   anyone joins, and travel to the guest in the lobby handshake. */
+const pick = { pitch: 'normal', pace: 'normal', squad: '3' };
+
+const randCode = () => {
+  let s = '';
+  for (let i = 0; i < 4; i++) s += ALPHA[Math.floor(Math.random() * ALPHA.length)];
+  return s;
+};
+
+const enc = s => [...new TextEncoder().encode(s)];
+const varint = n => {
+  const a = []; do { let d = n % 128; n = Math.floor(n / 128); if (n > 0) d |= 128; a.push(d); }
+  while (n > 0); return a;
+};
+const str = s => { const b = enc(s); return [b.length >> 8, b.length & 255].concat(b); };
+
+/* A minimal MQTT client. Writing it out is what keeps this page dependency-free:
+   no library, no account, and the free broker only ever sees opaque payloads. */
+function mqConnect({ onReady, onMessage, onFail }) {
+  let ws;
+  try { ws = new WebSocket(BROKER, ['mqtt']); }
+  catch (e) { onFail && onFail('cannot open'); return null; }
+
+  const clientId = 'sqd' + Math.random().toString(36).slice(2, 12);
+  let buf = new Uint8Array(0);
+  let alive = false;
+  let pinger = 0;
+
+  const send = bytes => { try { ws.send(new Uint8Array(bytes).buffer); } catch (e) {} };
+  const link = { api: null, close() { clearInterval(pinger); alive = false; try { ws.close(); } catch (e) {} } };
+
+  ws.onopen = () => {
+    ws.binaryType = 'arraybuffer';
+    const vh = [].concat(str('MQTT'), [4, 0x02, 0, 60], str(clientId));
+    send([0x10, ...varint(vh.length), ...vh]);
+  };
+
+  ws.onmessage = evt => {
+    const chunk = new Uint8Array(evt.data);
+    const merged = new Uint8Array(buf.length + chunk.length);
+    merged.set(buf); merged.set(chunk, buf.length);
+    buf = merged;
+
+    for (;;) {
+      if (buf.length < 2) return;
+      let mult = 1, len = 0, i = 1, byte;
+      do {
+        if (i >= buf.length) return;
+        byte = buf[i++];
+        len += (byte & 127) * mult;
+        mult *= 128;
+      } while (byte & 128);
+
+      if (buf.length < i + len) return;
+      const type = buf[0] >> 4;
+      const body = buf.slice(i, i + len);
+      buf = buf.slice(i + len);
+
+      if (type === 2) {
+        alive = true;
+        link.api = {
+          subscribe(topic) {
+            const b = [].concat([0x00, 0x01], str(topic), [0x00]);
+            send([0x82, ...varint(b.length), ...b]);
+          },
+          publish(topic, payload) {
+            const b = [].concat(str(topic), enc(payload));
+            send([0x30, ...varint(b.length), ...b]);
+          }
+        };
+        onReady && onReady(link.api);
+      } else if (type === 3) {
+        const tlen = (body[0] << 8) | body[1];
+        onMessage && onMessage(new TextDecoder().decode(body.slice(2 + tlen)));
+      }
+    }
+  };
+
+  ws.onclose = () => { alive = false; link.api = null; onFail && onFail('closed'); };
+  ws.onerror = () => {};
+
+  pinger = setInterval(() => { if (alive) send([0xC0, 0x00]); }, 25000);
+  return link;
+}
+
+const hostTopic = code => TOPIC + code + '/toHost';
+const guestTopic = code => TOPIC + code + '/toGuest';
+
+function hangUp() {
+  clearInterval(knockTimer); clearInterval(sendTimer); clearTimeout(retryTimer);
+  knockTimer = sendTimer = retryTimer = 0;
+  if (mq) { try { mq.close(); } catch (e) {} }
+  mq = null; joined = false;
+}
+
+/* ---- what travels ----
+
+   The whole world is small enough to send as it stands: at most ten bodies, a
+   ball, and the round facts. Nothing here is derived, so the guest can rebuild
+   an identical copy rather than guessing at one. */
+function snapshot(g) {
+  g.seq = (g.seq || 0) + 1;
+  return {
+    seq: g.seq,
+    w: g.w, h: g.h, pitch: g.pitch, pace: g.pace, squad: g.squad,
+    attacker: g.attacker, ballOwner: g.ballOwner,
+    sel: { 1: g.sel[1], 2: g.sel[2] },
+    bodies: {
+      1: g.bodies[1].map(b => ({ x: b.x, y: b.y, h: b.h, speed: b.speed, want: b.want,
+                                 moving: b.moving, running: b.running, chasing: b.chasing,
+                                 stumble: b.stumble })),
+      2: g.bodies[2].map(b => ({ x: b.x, y: b.y, h: b.h, speed: b.speed, want: b.want,
+                                 moving: b.moving, running: b.running, chasing: b.chasing,
+                                 stumble: b.stumble }))
+    },
+    ball: { x: g.ball.x, y: g.ball.y, vx: g.ball.vx, vy: g.ball.vy,
+            state: g.ball.state, targetIdx: g.ball.targetIdx, life: g.ball.life },
+    score: { 1: g.score[1], 2: g.score[2] },
+    rounds: { 1: g.rounds[1], 2: g.rounds[2] },
+    t: g.t, over: g.over, winner: g.winner, tick: g.tick,
+    startedAt: g.startedAt
+  };
+}
+
+const copyBody = b => ({ x: b.x, y: b.y, h: b.h, speed: b.speed, want: b.want,
+                         moving: b.moving, running: b.running, chasing: b.chasing,
+                         stumble: b.stumble || 0,
+                         trail: [] });
+
+/* Build the guest's local world from a snapshot. Discrete facts are adopted as
+   they stand; positions are reconciled afterwards. */
+function replicaFrom(s) {
+  replica = {
+    replica: true,
+    w: s.w, h: s.h, pitch: s.pitch, pace: s.pace, squad: s.squad,
+    attacker: s.attacker, ballOwner: s.ballOwner,
+    sel: { 1: s.sel[1], 2: s.sel[2] },
+    bodies: { 1: s.bodies[1].map(copyBody), 2: s.bodies[2].map(copyBody) },
+    ball: { ...s.ball },
+    score: { 1: s.score[1], 2: s.score[2] },
+    rounds: { 1: s.rounds[1], 2: s.rounds[2] },
+    t: s.t, over: s.over, winner: s.winner, tick: s.tick,
+    startedAt: s.startedAt, seq: 0
+  };
+  corr = [];
+  for (const sd of [1, 2]) {
+    for (const b of s.bodies[sd]) corr.push({ x: 0, y: 0 });
+  }
+}
+
+/* Take in what the host knows. A new round is a genuine discontinuity, so start
+   from the host's copy. Otherwise adopt the facts and record the gap as a
+   correction to be spent over the next few frames. */
+function absorb(s) {
+  if (!replica || replica.over !== s.over || replica.attacker !== s.attacker ||
+      Math.abs(replica.t - s.t) > 1.0) {
+    replicaFrom(s);
+    return;
+  }
+
+  replica.t = s.t;
+  replica.tick = s.tick;
+  replica.score = { 1: s.score[1], 2: s.score[2] };
+  replica.rounds = { 1: s.rounds[1], 2: s.rounds[2] };
+  replica.over = s.over;
+  replica.winner = s.winner;
+  replica.ballOwner = s.ballOwner;
+  replica.ball.state = s.ball.state;
+  replica.ball.targetIdx = s.ball.targetIdx;
+
+  /* My own steering is mine. The host's copy of it is a round trip behind, and
+     adopting it would undo the press I just made. */
+  const mySeat = seat;
+  replica.sel[mySeat] = replica.sel[mySeat];
+
+  let k = 0;
+  for (const sd of [1, 2]) {
+    for (let i = 0; i < s.bodies[sd].length; i++) {
+      const hb = s.bodies[sd][i], lb = replica.bodies[sd][i];
+      if (!lb) continue;
+
+      const mine = (sd === mySeat);
+      if (!mine) {
+        lb.want = hb.want;
+        lb.moving = hb.moving;
+        lb.running = hb.running;
+        lb.chasing = hb.chasing;
+        lb.h = hb.h;
+        lb.speed = hb.speed;
+        if (corr[k]) { corr[k].x = hb.x - lb.x; corr[k].y = hb.y - lb.y; }
+      }
+      k++;
+    }
+  }
+
+  /* Too far apart to be drift - snap, or the two would spend a second catching
+     up and look wrong the whole time. */
+  let worst = 0;
+  for (const c of corr) worst = Math.max(worst, Math.hypot(c.x, c.y));
+  if (worst > 3.5) {
+    for (const sd of [1, 2]) {
+      replica.bodies[sd] = s.bodies[sd].map(copyBody);
+    }
+    for (const c of corr) { c.x = 0; c.y = 0; }
+  }
+}
+
+/* The guest ticks its own copy every frame, spending a fifth of the outstanding
+   correction each slice so a late message never shows as a jump. */
+function tickReplica(dt) {
+  if (!replica || replica.over) return;
+  const slices = Math.ceil(dt / 0.02);
+  const each = dt / slices;
+  for (let i = 0; i < slices && !replica.over; i++) {
+    tick(replica, each);
+    let k = 0;
+    for (const sd of [1, 2]) {
+      for (const b of replica.bodies[sd]) {
+        const c = corr[k++];
+        if (!c) continue;
+        b.x += c.x * 0.2; b.y += c.y * 0.2;
+        c.x *= 0.8; c.y *= 0.8;
+      }
+    }
+  }
+}
+
+
+/* ---- the loop ---- */
+
+/* Fixed step, so the physics is the same on every device: a phone at 120Hz and a
+   desktop at 60Hz must not produce two different games. */
+const DT = 1 / 120;
+let last = 0, acc = 0;
+
+/* ---- who is playing here ----
+
+   Three modes drive the same loop:
+     solo  - the local world is the game, and the bot drives seat 2
+     host  - the local world is the game, seat 2 is the other phone
+     guest - the local world is a replica, and the game belongs to the host
+
+   One loop with those cases inside it is what stops the solo page and the
+   networked page drifting apart, which is how two copies of a rule end up
+   disagreeing. */
+function localGame() {
+  if (mode === 'guest') return replica;
+  return GAME;
+}
+
+function mySeat() { return mode === 'guest' ? 2 : 1; }
+
+function frame(now) {
+  if (!last) last = now;
+  let dt = (now - last) / 1000;
+  last = now;
+  if (dt > 0.25) dt = 0.25;
+  acc += dt;
+
+  while (acc >= DT) {
+    if (mode === 'guest') {
+      tickReplica(DT);
+    } else if (mode === 'host') {
+      tick(GAME, DT);              /* seat 2's input arrives on the wire */
+    } else {
+      if (!GAME.over) botDrive(GAME);
+      tick(GAME, DT);
+    }
+    acc -= DT;
+  }
+
+  /* Whoever catches the ball is the player you steer. This runs once per frame on
+     the local seat only, so it can never fight with the other player's choice. */
+  const world = localGame();
+  if (world) autoSelect(world);
+
+  const g = localGame();
+  if (g) { draw(g); updateText(g); }
+  requestAnimationFrame(frame);
+}
+
+const $ = id => document.getElementById(id);
+
+function updateText(g) {
+  if (!g) return;
+  const weHaveIt = g.attacker === mySeat();
+  $('who').textContent = weHaveIt ? 'You have the ball' : 'They have the ball';
+  $('who').classList.toggle('d', !weHaveIt);
+  $('sa').textContent = g.score[mySeat()];
+  $('sb').textContent = g.score[mySeat() === 1 ? 2 : 1];
+  $('clock').textContent = Math.max(0, Math.ceil(ROUND_SECONDS - g.t));
+
+  /* There are no button labels to keep in sync any more: the label WAS the whole
+     explanation of the controls, and the gestures replaced it. What the caption
+     has to do now is say what a tap will do, because that is the one thing a
+     gesture vocabulary cannot show you. */
+  if (g.over) {
+    const t = g.over === 'goal' ? 'Goal.' : 'Time.';
+    const who = g.winner === mySeat() ? 'Yours.' :
+                g.winner ? 'Theirs.' : 'Nobody.';
+    $('cap').innerHTML = '<b>' + t + '</b> ' + who;
+    if (matchWon(g)) finishMatch(g);
+  } else {
+    /* The caption reports EVENTS only. It used to restate the controls, which the
+       hint below already does - two lines saying the same thing, one above the
+       field and one below it, which read as a duplicate rather than as help. */
+    if (g.ball.state === 'shot') {
+      $('cap').innerHTML = '<b>Shot away.</b>';
+    } else if (g.ball.state === 'pass') {
+      $('cap').innerHTML = '<b>Ball travelling.</b>';
+    } else {
+      $('cap').innerHTML = '';
+    }
+  }
+}
+
+function finishMatch(g) {
+  if (matchOver) return;
+  matchOver = true;
+  const won = g.rounds[mySeat()] > g.rounds[mySeat() === 1 ? 2 : 1];
+  $('overTitle').textContent = won ? 'You win the match.' : 'They win the match.';
+  $('overBody').textContent = g.rounds[mySeat()] + ' to ' + g.rounds[mySeat() === 1 ? 2 : 1] + '.';
+  $('over').classList.remove('hidden');
+}
+let matchOver = false;
+
+/* a short pause on the result, then the next round stands itself up. Only the
+   side that owns the game advances it; the guest is told. */
+let overAge = 0;
+setInterval(() => {
+  if (mode === 'guest') return;
+  if (!GAME.over || matchOver) return;
+  overAge++;
+  if (overAge >= 22) {
+    overAge = 0;
+    nextRound(GAME);
+    if (mode === 'host') sendState();
+  }
+}, 100);
+
+/* ---- the door ----
+
+   The how-to card comes before the game and waits for a press. An instruction that
+   fades on a timer is one you read while already losing; one you dismiss yourself
+   is one you finish. */
+let pendingStart = null;
+
+function showHowTo(then) {
+  pendingStart = then;
+  $('door').classList.add('hidden');
+  $('lobby').classList.add('hidden');
+  $('howto').classList.remove('hidden');
+}
+
+$('howgo').addEventListener('click', () => {
+  $('howto').classList.add('hidden');
+  const run = pendingStart;
+  pendingStart = null;
+  if (run) run();
+});
+
+function startSolo() {
+  hangUp();
+  mode = 'solo';
+  seat = 1;
+  Object.assign(GAME, newGame(pick));
+  startRound(GAME);
+  matchOver = false;
+  fit();
+  requestAnimationFrame(frame);
+}
+
+$('go').addEventListener('click', () => showHowTo(startSolo));
+
+$('again').addEventListener('click', () => {
+  $('over').classList.add('hidden');
+  const g = localGame();
+  if (!g) return;
+  g.score = { 1: 0, 2: 0 };
+  g.rounds = { 1: 0, 2: 0 };
+  g.kickoff = 1;
+  matchOver = false;
+  startRound(g);
+  if (mode === 'host') sendState();
+});
+
+/* ---- the lobby ----
+
+   Both phones sit here. The host chooses; the guest watches the choices arrive and
+   waits to be started. Nothing about the game runs until the host presses start,
+   so a guest never sees a half-configured world. */
+function paintLobby() {
+  const isHost = mode === 'host';
+  $('lobbyTitle').textContent = isHost ? 'Your game' : 'Their game';
+  $('codeOut').textContent = hostCode || '----';
+  $('shareHint').textContent = isHost
+    ? 'The other phone types this code.'
+    : 'Waiting for them to start.';
+
+  $('opts').style.display = isHost ? '' : 'none';
+  document.querySelectorAll('#opts .axis').forEach(axis => {
+    for (const b of axis.querySelectorAll('button')) {
+      b.setAttribute('aria-pressed', String(pick[axis.dataset.axis] === b.dataset.val));
+    }
+  });
+
+  if (isHost) {
+    $('start').disabled = !joined;
+    $('start').textContent = joined ? 'Start the game' : 'Waiting for the other phone';
+  } else {
+    $('start').disabled = true;
+    $('start').textContent = 'Waiting for them to start';
+  }
+}
+
+$('host').addEventListener('click', () => { startHost(); });
+$('join').addEventListener('click', () => {
+  const code = ($('code').value || '').trim().toUpperCase();
+  if (code.length !== 4) { $('err').textContent = 'A code is four letters.'; return; }
+  $('err').textContent = '';
+  startGuest(code);
+});
+$('code').addEventListener('input', e => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '').slice(0, 4);
+});
+$('code').addEventListener('keydown', e => {
+  if (e.key === 'Enter') $('join').click();
+});
+
+for (const axis of document.querySelectorAll('#opts .axis')) {
+  axis.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b || mode !== 'host') return;
+    pick[axis.dataset.axis] = b.dataset.val;
+    paintLobby();
+    /* the other phone should see what it is about to play */
+    sendLobby();
+  });
+}
+
+$('start').addEventListener('click', () => {
+  if (mode !== 'host' || !joined) return;
+  showHowTo(() => {
+    beginMatch();
+    sendLobby();
+    sendState();
+  });
+});
+
+function beginMatch() {
+  Object.assign(GAME, newGame(pick));
+  startRound(GAME);
+  matchOver = false;
+  $('lobby').classList.add('hidden');
+  fit();
+  requestAnimationFrame(frame);
+  /* The host owns the clock. Publishing only once would freeze the guest on the
+     first frame it ever saw, which is exactly what it did. */
+  startSendLoop();
+}
+
+function sendLobby() {
+  if (mode !== 'host' || !mq || !mq.api) return;
+  try {
+    mq.api.publish(guestTopic(hostCode), JSON.stringify({ t: 'lobby', pick: { ...pick } }));
+  } catch (e) {}
+}
+
+/* ---- host ---- */
+function startHost() {
+  hangUp();
+  mode = 'host';
+  seat = 1;
+  hostCode = randCode();
+  Object.assign(GAME, newGame(pick));
+  view = null;
+  replica = null;
+
+  $('door').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  $('lobbyErr').textContent = '';
+  $('waitOut').textContent = 'Opening the room…';
+  paintLobby();
+
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(hostTopic(hostCode));
+      if (mode === 'host' && !joined) $('waitOut').textContent = 'Waiting for the other phone.';
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onGuestMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'host') return;
+      $('lobbyErr').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'host') startHost(); }, 2500);
+    }
+  });
+}
+
+function hostJoined() {
+  if (mode !== 'host' || joined) return;
+  joined = true;
+  $('waitOut').textContent = 'They are here.';
+  paintLobby();
+  sendLobby();
+}
+
+function onGuestMessage(msg) {
+  if (mode !== 'host' || !GAME || !msg) return;
+  hostJoined();
+
+  if (msg.t === 'hello') { sendLobby(); return; }
+
+  /* The guest writes only its own selected body. Everything else about its side
+     is the host's to decide, so there is one owner per body. */
+  if (msg.t === 'sel') {
+    if (typeof msg.i === 'number') {
+      GAME.sel[2] = Math.max(0, Math.min(GAME.bodies[2].length - 1, msg.i));
+    }
+    return;
+  }
+  if (msg.t === 'body') {
+    const b = GAME.bodies[2][msg.i];
+    if (!b) return;
+    if (typeof msg.want === 'number') b.want = msg.want;
+    if (typeof msg.moving === 'boolean') b.moving = msg.moving;
+    if (typeof msg.chasing === 'boolean') b.chasing = msg.chasing;
+    if (typeof msg.running === 'boolean') b.running = msg.running;
+    return;
+  }
+  if (msg.t === 'pass') {
+    if (GAME.ball.state === 'held' && GAME.attacker === 2) passTo(GAME, msg.i);
+    return;
+  }
+  if (msg.t === 'shot') {
+    if (GAME.ball.state === 'held' && GAME.attacker === 2 &&
+        typeof msg.dir === 'number') {
+      const sp = SHOT_SPEED * paceOf(GAME);
+      GAME.ball.state = 'shot';
+      GAME.ball.targetIdx = -1;
+      GAME.ball.vx = Math.cos(rad(msg.dir)) * sp;
+      GAME.ball.vy = Math.sin(rad(msg.dir)) * sp;
+      GAME.ball.life = 0;
+    }
+    return;
+  }
+  if (msg.t === 'next' && GAME.over) { nextRound(GAME); sendState(); }
+}
+
+function hostSay(payload) {
+  if (mode !== 'host' || !mq || !mq.api) return;
+  try { mq.api.publish(guestTopic(hostCode), JSON.stringify(payload)); } catch (e) {}
+}
+
+function sendState() {
+  if (mode !== 'host' || !GAME) return;
+  hostSay({ t: 's', s: snapshot(GAME) });
+}
+
+/* The host is the only one with a game to publish, so this is called when the
+   host starts the match - not from the guest, which has nothing to send. */
+function startSendLoop() {
+  clearInterval(sendTimer);
+  sendTimer = setInterval(() => {
+    if (mode === 'host' && joined && GAME) sendState();
+  }, Math.round(1000 / SEND_HZ));
+}
+
+/* ---- guest ---- */
+function startGuest(code) {
+  hangUp();
+  mode = 'guest';
+  seat = 2;
+  hostCode = code;
+  view = null;
+  replica = null;
+
+  $('door').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  $('lobbyErr').textContent = '';
+  $('waitOut').textContent = 'Joining ' + code + '…';
+  paintLobby();
+
+  mq = mqConnect({
+    onReady: (api) => {
+      api.subscribe(guestTopic(code));
+      const hello = () => {
+        try { if (mode === 'guest') api.publish(hostTopic(code), JSON.stringify({ t: 'hello' })); } catch (e) {}
+      };
+      hello();
+      knockLater(hello);
+    },
+    onMessage: (payload) => {
+      let msg; try { msg = JSON.parse(payload); } catch (e) { return; }
+      onHostMessage(msg);
+    },
+    onFail: (why) => {
+      if (mode !== 'guest') return;
+      $('lobbyErr').textContent = 'Lost the connection (' + why + '). Trying again…';
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (mode === 'guest') startGuest(hostCode); }, 2500);
+    }
+  });
+}
+
+function knockLater(hello) {
+  clearInterval(knockTimer);
+  let tries = 0;
+  knockTimer = setInterval(() => {
+    if (mode !== 'guest' || view) { clearInterval(knockTimer); knockTimer = 0; return; }
+    if (++tries > 25) {
+      clearInterval(knockTimer); knockTimer = 0;
+      $('lobbyErr').textContent =
+        'No answer from ' + hostCode + '. Check the four letters, and that the other phone still shows them.';
+      return;
+    }
+    hello();
+  }, 900);
+}
+
+function onHostMessage(msg) {
+  if (mode !== 'guest' || !msg) return;
+
+  if (msg.t === 'lobby' && msg.pick) {
+    Object.assign(pick, msg.pick);
+    if (msg.squad) pick.squad = String(msg.squad);
+    paintLobby();
+    return;
+  }
+
+  if (msg.t === 's' && msg.s) {
+    const first = !view;
+    view = msg.s;
+    Object.assign(pick, { pitch: msg.s.pitch, pace: msg.s.pace, squad: String(msg.s.squad) });
+    absorb(msg.s);
+    $('lobby').classList.add('hidden');
+    if (first) {
+      /* The guest has nothing to publish - the host owns the game - so it only
+         starts drawing its own copy. */
+      fit();
+      requestAnimationFrame(frame);
+    }
+  }
+}
+
+function guestSay(obj) {
+  if (mode !== 'guest' || !mq || !mq.api) return;
+  try { mq.api.publish(hostTopic(hostCode), JSON.stringify(obj)); } catch (e) {}
+}
+
+
+addEventListener('resize', () => { fit(); });
+addEventListener('orientationchange', () => setTimeout(fit, 120));
+
+/* The field row changes height when the caption rewraps or the keyboard appears,
+   so fit from the element itself rather than only on window resize. */
+if (window.ResizeObserver) {
+  new ResizeObserver(() => fit()).observe(cvs.parentElement);
+}
+
+/* The build stamp, so a cached copy is identifiable at a glance. It is read from
+   the const above rather than typed twice. */
+document.getElementById('build').textContent = 'build ' + BUILD;
+
+/* expose for the checks - top-level let/const are not window properties */
+window.__squad = () => ({ GAME, tick, startRound, nextRound, roleOf,
+                          carrierOf, ballAt, stepBody, matchWon, SPEED, TURN,
+                          REACH, BLOCK, PITCHES, passTo, stepBall, syncHeldBall,
+                          botDrive, newGame, attacksUp, goalLineOf, forwardHeading,
+                          turnover, laneClear, bestPassTarget, switchPlayer,
+                          chaseHeading, snapDir });
+</script>
+</body>
+</html>
+
+
+
+
+
